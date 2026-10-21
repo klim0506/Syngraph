@@ -1,0 +1,38 @@
+# Owner's learning materials
+_learn/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+__pycache__/
+.venv/
+dist/
+build/
+
+# Local settings
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Agent files
+AGENTS.md
+CLAUDE.md
+.claude/
+.codex/
+.cursor/
+TASKS.md
+DECISIONS.md
+
+# Drafts awaiting approval
+_мусор/
+
+# Obsidian
+.obsidian/
+
+# Russian versions of public files (local only)
+*.ru.*
