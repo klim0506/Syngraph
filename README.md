@@ -2,7 +2,7 @@
 
 A payment layer for companies' AI agents: an agent pays from the company account strictly within the limits the client has set
 
-Syngraph sits between the agent and any bank. We hold the agent's mandate, the rules, human validation and the operation journal. The bank only executes payments via the Bank of Russia Open API. Two scenarios: paying a supplier invoice (B2B) and paying by card on a website.
+Syngraph sits between the agent and any bank. We hold the agent's mandate, the rules, human validation and the operation journal. The bank only executes payments — through its business API or the Bank of Russia Open API. The MVP covers paying supplier invoices (B2B) from the bank where the client already holds its account. Card payments on websites come later.
 
 ```
  company agent             demo/agent/ · developers/sdk-python/
@@ -18,7 +18,7 @@ Syngraph sits between the agent and any bank. We hold the agent's mandate, the r
       │
       │ Bank of Russia Open API
       ▼
- client's bank             demo/bank-sandbox/ — sandbox, later any bank
+ client's own bank         demo/bank-sandbox/ — sandbox, later real banks
 ```
 
 **`product/` — the Syngraph service**
@@ -42,7 +42,7 @@ Syngraph sits between the agent and any bank. We hold the agent's mandate, the r
 |---|---|
 | [`agent/`](demo/agent/) | Demo agent: paying invoices (B2B) and paying by card on websites |
 | [`bank-sandbox/`](demo/bank-sandbox/) | Bank sandbox with the Bank of Russia Open API; later replaced by a real bank |
-| [`shop/`](demo/shop/) | Test online shop for card payments |
+| [`shop/`](demo/shop/) | Test online shop for card payments (after MVP) |
 
 ## License
 
