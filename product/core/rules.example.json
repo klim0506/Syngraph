@@ -1,0 +1,10 @@
+{
+  "client_id": 1,
+  "timezone": "Europe/Moscow",
+  "working_hours": {"days": ["mon", "tue", "wed", "thu", "fri"], "from": "09:00", "to": "19:00"},
+  "allowed_counterparties": "any",
+  "max_payment_kopecks": 10000000,
+  "max_day_kopecks": 50000000,
+  "max_week_kopecks": 150000000,
+  "max_month_kopecks": 300000000
+}

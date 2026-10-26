@@ -9,6 +9,10 @@ _learn/
 # Dependencies and build output
 node_modules/
 __pycache__/
+*.egg-info/
+
+# Runtime data
+product/core/data/
 .venv/
 dist/
 build/

@@ -1,0 +1,8 @@
+[project]
+name = "syngraph-core"
+version = "0.0.1"
+dependencies = ["httpx", "uuid6", "tzdata"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["core"]
