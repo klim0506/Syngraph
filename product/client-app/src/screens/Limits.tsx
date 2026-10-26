@@ -88,7 +88,6 @@ export default function Limits({ agent, onAgent }: Props) {
 
   return (
     <form onSubmit={save}>
-      <p className="muted section-note">{t.limitsNote}</p>
       <section className="card">
         {PERIODS.map((period) => (
           <label className="field" key={period}>
@@ -108,7 +107,6 @@ export default function Limits({ agent, onAgent }: Props) {
       </section>
 
       <h2>{t.workingHours}</h2>
-      <p className="muted">{t.hoursNote(agent.timezone)}</p>
       <section className="card">
         <div className="days" role="group" aria-label={t.workingHours}>
           {WEEKDAYS.map((d) => (

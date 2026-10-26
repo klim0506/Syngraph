@@ -9,18 +9,19 @@ The Syngraph client app — for people at the company.
 
 Works only through the `core` API.
 
-Now: a mobile app for the demo client (id 1), no sign-in; on a large screen it is shown in a phone outline.
+Now: a mobile app for the demo client (id 1), no sign-in; on a large screen it is shown in a phone outline on a navy backdrop. The look follows the project presentation, kept to the minimum: navy blocks, one bright blue accent, white cards, monospaced figures; light and dark themes.
 
-- **Agents** — the client's agents; **Create** adds one. An agent opens with four sections: **Overview** (pause, spent today, this week and this month against the limits, latest payments), **Limits** (per payment, day, week, month, working days and hours), **Payees** ("Anyone / Only from the list", adding by suggestion, by INN — the name comes from the directory — or as a new one, removal), **Key** (create or replace the agent's key; it is shown once, with **Copy**).
-- **Payments** — operations of all agents with filters, details and "Check with the bank" for an unconfirmed one.
+- **Agents** — the client's agents, each with its icon, today's spending and status; **+** adds one. An agent opens with four sections: **Overview** (spent today, this week and this month against the limits, latest payments; pause is on the agent card), **Limits** (per payment, day, week, month, working days and hours), **Payees** ("Anyone / Only from the list", adding by suggestion, by INN — the name comes from the directory — or as a new one, removal), **Settings** (the agent's key — created or replaced here and shown once, with **Copy** — its name and icon).
+- **History** — payments of all agents; filters by payee or INN, agent and period, and by status. A payment opens as its passport; an unconfirmed one can be checked with the bank.
+- **Settings** — language and theme.
 
-Data refreshes every 3 seconds, and a new agent payment pops up at the bottom.
+Data refreshes every 3 seconds, and a new agent payment pops up at the bottom. Icons come from Lucide (ISC license).
 
 ## Languages
 
-English, Russian, French and Arabic (right to left), switched at the top; the choice is remembered in the browser. Messages from the core are shown in the chosen language too.
+English, Russian, French and Arabic (right to left), chosen in **Settings**; flags show in the open list. The language and the theme are remembered in the browser; the first theme follows the system. Messages from the core are shown in the chosen language too.
 
-To add a language: copy `src/i18n/en.ts` to a new file, translate it and add it to `LANGUAGES` in `src/i18n/index.ts`. TypeScript reports any missing phrase.
+To add a language: copy `src/i18n/en.ts` to a new file, translate it, add it to `LANGUAGES` in `src/i18n/index.ts` and give it a flag in `src/i18n/flags.tsx`. TypeScript reports any missing phrase.
 
 ## Run
 

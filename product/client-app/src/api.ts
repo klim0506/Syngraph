@@ -4,11 +4,13 @@ export const CLIENT_ID = 1;
 export type Period = "payment" | "day" | "week" | "month";
 export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 export const WEEKDAYS: Weekday[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+export type AgentIcon = "invoice" | "cart" | "plane" | "truck" | "briefcase" | "building" | "card" | "bank";
 
 /** An agent with its own mandate. */
 export type Agent = {
   id: number;
   name: string;
+  icon: AgentIcon;
   has_key: boolean;
   key_hint: string | null; // last characters of the current key
   paused: boolean;
@@ -25,6 +27,7 @@ export type Agent = {
 /** Only the fields to change. Limits are rubles as strings, like "100000.00". */
 export type AgentChange = Partial<{
   name: string;
+  icon: AgentIcon;
   paused: boolean;
   any_counterparty: boolean;
   working_days: Weekday[];

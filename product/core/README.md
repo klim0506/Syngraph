@@ -18,7 +18,7 @@ A client has several agents; each has its own mandate and its own key. The key (
 SQLite, `data/syngraph.db` (not in git):
 
 - `clients`;
-- `agents` — name, key hash and hint, one mandate each;
+- `agents` — name, icon, key hash and hint, one mandate each;
 - `mandates` — the agent's rules: working days and hours, "any payee / only listed", limits per payment, day, week and month, pause;
 - `counterparties` — organisations shared by all clients, one row per INN; the INN is the key and the stored name is the one sent to the bank; an unknown INN is added with the name from the request;
 - `mandate_counterparties` — whom an agent may pay;
@@ -31,7 +31,7 @@ Limits count `paid`, `pending` and `unknown` payments. Every bank order carries 
 `api.py` (FastAPI), run with `python -m uvicorn core.api:app --port 8000`, all under `/api/clients/{id}`:
 
 - `GET`, `POST /agents` — the agents with their rules and spending; a new agent;
-- `GET`, `PATCH /agents/{agent}` — name, pause, "any / only listed", working days and hours, limits in rubles that must grow per payment <= day <= week <= month;
+- `GET`, `PATCH /agents/{agent}` — name, icon, pause, "any / only listed", working days and hours, limits in rubles that must grow per payment <= day <= week <= month;
 - `POST /agents/{agent}/key` — a new key, returned only here;
 - `GET`, `POST /agents/{agent}/counterparties`, `DELETE .../{inn}` — the agent's payees; `GET /api/counterparties/{inn}` looks up the shared directory by exact INN only;
 - `GET /operations?agent_id=` — payments of all agents or of one; `POST /operations/{op}/check` asks the bank again.

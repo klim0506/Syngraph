@@ -38,7 +38,7 @@ export default function AgentKey({ agent, onChanged }: Props) {
 
   return (
     <section className="card key">
-      <p className="muted">{t.keyNote}</p>
+      {(!agent.has_key || key) && <p className="muted">{t.keyNote}</p>}
 
       {key ? (
         <>
@@ -57,9 +57,14 @@ export default function AgentKey({ agent, onChanged }: Props) {
         </>
       ) : (
         <>
-          <div className="key-state">{agent.has_key && agent.key_hint ? t.keyCurrent(agent.key_hint) : t.keyNone}</div>
-          {agent.has_key && <p className="muted">{t.replaceWarn}</p>}
-          <button type="button" className={agent.has_key ? "btn-secondary" : "btn-primary"} disabled={busy} onClick={create}>
+          {agent.has_key && agent.key_hint && <div className="key-state">{t.keyCurrent(agent.key_hint)}</div>}
+          <button
+            type="button"
+            className={agent.has_key ? "btn-secondary" : "btn-primary"}
+            disabled={busy}
+            onClick={create}
+            title={agent.has_key ? t.replaceWarn : undefined}
+          >
             {agent.has_key ? t.replaceKey : t.createKey}
           </button>
         </>

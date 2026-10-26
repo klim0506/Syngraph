@@ -3,15 +3,19 @@ import { Agent, getAgents, getOperations, Operation, rub } from "./api";
 import { I18n, initialLang, Lang, LANGUAGES, saveLang } from "./i18n";
 import AgentScreen from "./screens/Agent";
 import Agents from "./screens/Agents";
-import Payments from "./screens/Payments";
+import History from "./screens/History";
+import Settings from "./screens/Settings";
+import { applyTheme, initialTheme, Theme } from "./theme";
 
-type Tab = "agents" | "payments";
+type Tab = "agents" | "history" | "settings";
+const TABS: Tab[] = ["agents", "history", "settings"];
 
 const REFRESH_MS = 3000; // payments made by agents through MCP show up on their own
 const TOAST_MS = 5000;
 
 export default function App() {
   const [lang, setLang] = useState<Lang>(initialLang);
+  const [theme, setTheme] = useState<Theme>(initialTheme);
   const [tab, setTab] = useState<Tab>("agents");
   const [agentId, setAgentId] = useState<number | null>(null); // the open agent, inside the Agents tab
   const [agents, setAgents] = useState<Agent[] | null>(null);
@@ -26,6 +30,8 @@ export default function App() {
     document.documentElement.dir = t.dir;
     saveLang(lang);
   }, [lang, t.dir]);
+
+  useEffect(() => applyTheme(theme), [theme]);
 
   const refresh = useCallback(async () => {
     try {
@@ -70,8 +76,10 @@ export default function App() {
   const screen =
     !agents || !operations ? (
       <div className="loading">{offline ? t.unreachable : t.loading}</div>
-    ) : tab === "payments" ? (
-      <Payments operations={operations} onChanged={refresh} />
+    ) : tab === "history" ? (
+      <History agents={agents} operations={operations} onChanged={refresh} />
+    ) : tab === "settings" ? (
+      <Settings lang={lang} onLang={setLang} theme={theme} onTheme={setTheme} />
     ) : openAgent ? (
       <AgentScreen
         agent={openAgent}
@@ -89,14 +97,10 @@ export default function App() {
       <div className="stage">
         <div className="phone">
           <header className="appbar">
+            <span className="logo" aria-hidden>
+              S
+            </span>
             <span className="brand">Syngraph</span>
-            <div className="langs" role="group" aria-label="Language">
-              {(Object.keys(LANGUAGES) as Lang[]).map((l) => (
-                <button key={l} type="button" aria-pressed={l === lang} title={LANGUAGES[l].name} onClick={() => setLang(l)}>
-                  {l.toUpperCase()}
-                </button>
-              ))}
-            </div>
           </header>
 
           {offline && agents && <div className="banner">{t.reconnecting}</div>}
@@ -106,7 +110,7 @@ export default function App() {
           </main>
 
           {toast && (
-            <button type="button" className="toast" onClick={() => { openTab("payments"); setToastId(null); }}>
+            <button type="button" className="toast" onClick={() => { openTab("history"); setToastId(null); }}>
               <b className={`status-${toast.status}`}>{t.toast[toast.status]}</b>
               <span>
                 {toast.agent_name} → {toast.payee} · {rub(toast.amount_kopecks)}
@@ -115,7 +119,7 @@ export default function App() {
           )}
 
           <nav className="tabbar">
-            {(["agents", "payments"] as Tab[]).map((id) => (
+            {TABS.map((id) => (
               <button
                 key={id}
                 type="button"

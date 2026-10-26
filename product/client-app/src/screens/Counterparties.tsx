@@ -112,7 +112,6 @@ export default function Counterparties({ agent, onAgent }: Props) {
 
   return (
     <>
-      <p className="muted section-note">{t.payeesNote}</p>
       <div className="segmented" role="group" aria-label={t.payees}>
         <button type="button" aria-pressed={agent.any_counterparty} onClick={() => act(async () => onAgent(await changeAgent(agent.id, { any_counterparty: true })))}>
           {t.anyone}
@@ -121,7 +120,6 @@ export default function Counterparties({ agent, onAgent }: Props) {
           {t.onlyList}
         </button>
       </div>
-      <p className="hint">{agent.any_counterparty ? t.anyHint : t.listHint}</p>
 
       <form className="card add-form" onSubmit={submit}>
         <div className="combo">

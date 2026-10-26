@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS agents (  -- a client's AI agent; each has its own ma
     client_id   INTEGER NOT NULL REFERENCES clients(id),
     mandate_id  INTEGER NOT NULL UNIQUE REFERENCES mandates(id),
     name        TEXT    NOT NULL,         -- "Invoice agent"
+    icon        TEXT    NOT NULL DEFAULT 'invoice',  -- one of AGENT_ICONS, chosen by the client
     secret_hash TEXT    UNIQUE,           -- SHA-256 of the agent's key; the key itself is never stored
     secret_hint TEXT,                     -- last characters of the key, to tell keys apart
     created_at  TEXT    NOT NULL
@@ -102,11 +103,15 @@ def connect() -> sqlite3.Connection:
 # Columns added after the first release: an older database gets them on open.
 ADDED_COLUMNS = {
     "mandates": {"paused": "INTEGER NOT NULL DEFAULT 0"},
+    "agents": {"icon": "TEXT NOT NULL DEFAULT 'invoice'"},
 }
 DEFAULT_AGENT_NAME = "Invoice agent"
+# Pictures the app can draw for an agent.
+AGENT_ICONS = ["invoice", "cart", "plane", "truck", "briefcase", "building", "card", "bank"]
 # The agent's settings joined with its mandate: rules read the mandate columns, `id` is the mandate id.
 AGENT_SELECT = (
-    "SELECT m.*, a.id AS agent_id, a.name AS agent_name, a.secret_hint, a.created_at AS agent_created_at"
+    "SELECT m.*, a.id AS agent_id, a.name AS agent_name, a.icon AS agent_icon, a.secret_hint,"
+    " a.created_at AS agent_created_at"
     " FROM agents a JOIN mandates m ON m.id = a.mandate_id"
 )
 # What the client may change in a mandate; anything else is never written from outside.
@@ -217,6 +222,10 @@ def set_agent_secret(conn: sqlite3.Connection, agent_id: int, secret_hash: str, 
 
 def rename_agent(conn: sqlite3.Connection, agent_id: int, name: str) -> None:
     conn.execute("UPDATE agents SET name = ? WHERE id = ?", (name, agent_id))
+
+
+def set_agent_icon(conn: sqlite3.Connection, agent_id: int, icon: str) -> None:
+    conn.execute("UPDATE agents SET icon = ? WHERE id = ?", (icon, agent_id))
 
 
 def find_counterparty(conn: sqlite3.Connection, inn: str) -> sqlite3.Row | None:

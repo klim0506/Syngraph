@@ -36,6 +36,7 @@ class ListedCounterparty(Counterparty):
 class Agent(TypedDict):
     id: int
     name: str
+    icon: str  # one of db.AGENT_ICONS
     has_key: bool
     key_hint: str | None  # last characters of the current key
     paused: bool
@@ -74,6 +75,7 @@ class NewAgent(BaseModel):
 class AgentChange(BaseModel):
     """Only the fields to change. Limits are rubles as strings, like "100000.00"."""
     name: str | None = None
+    icon: str | None = None
     paused: bool | None = None
     any_counterparty: bool | None = None
     working_days: list[str] | None = None
@@ -123,6 +125,7 @@ def agent_view(conn: sqlite3.Connection, agent: sqlite3.Row) -> Agent:
     return {
         "id": agent["agent_id"],
         "name": agent["agent_name"],
+        "icon": agent["agent_icon"],
         "has_key": agent["secret_hint"] is not None,
         "key_hint": agent["secret_hint"],
         "paused": bool(agent["paused"]),
@@ -225,6 +228,10 @@ def change_agent(client_id: int, agent_id: int, change: AgentChange) -> Agent:
         settings = settings_from(change, agent)
         if change.name is not None:
             db.rename_agent(conn, agent_id, check_agent_name(change.name))
+        if change.icon is not None:
+            if change.icon not in db.AGENT_ICONS:
+                raise InvalidRequest(f"icon must be one of {db.AGENT_ICONS}, got {change.icon!r}")
+            db.set_agent_icon(conn, agent_id, change.icon)
         db.update_mandate(conn, agent["id"], settings)
         conn.commit()
         return agent_view(conn, agent_of(conn, client_id, agent_id))

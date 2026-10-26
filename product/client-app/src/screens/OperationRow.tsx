@@ -43,25 +43,39 @@ export default function OperationRow({ operation: o, showAgent = false, onChange
           <span className="op-amount" dir="ltr">
             {rub(o.amount_kopecks)}
           </span>
-          <span className={`status status-${o.status}`}>{t.status[o.status]}</span>
+          <span className={`pill pill-${o.status}`}>{t.status[o.status]}</span>
         </span>
       </button>
-      {reason && !open && <div className="op-reason">{reason}</div>}
       {open && (
-        <dl className="op-details">
-          <dt>{t.agent}</dt>
-          <dd>{o.agent_name}</dd>
-          <dt>{t.inn}</dt>
-          <dd>{o.payee_inn}</dd>
-          <dt>{t.operation}</dt>
-          <dd className="mono">{o.id}</dd>
-          {reason && (
-            <>
-              <dt>{t.reason}</dt>
-              <dd>{reason}</dd>
-            </>
-          )}
-        </dl>
+        <div className="passport">
+          <div className="passport-head">
+            <div className="mono-label">
+              {t.passport} · {o.id.slice(-8).toUpperCase()}
+            </div>
+            <div className="passport-title">
+              <span>
+                {rub(o.amount_kopecks)} → {o.payee}
+              </span>
+              <span className={`pill pill-${o.status}`}>{t.status[o.status]}</span>
+            </div>
+          </div>
+          <dl className="passport-rows">
+            <dt>{t.agent}</dt>
+            <dd>{o.agent_name}</dd>
+            <dt>{t.inn}</dt>
+            <dd className="mono">{o.payee_inn}</dd>
+            {reason && (
+              <>
+                <dt>{t.reason}</dt>
+                <dd>{reason}</dd>
+              </>
+            )}
+            <dt>{t.operation}</dt>
+            <dd className="mono">
+              {when(o.created_at, t.locale)} · {o.id}
+            </dd>
+          </dl>
+        </div>
       )}
       {open && o.status === "unknown" && (
         <div className="op-actions">

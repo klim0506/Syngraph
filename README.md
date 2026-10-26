@@ -70,7 +70,7 @@ npm --prefix product/client-app install
 npm --prefix product/client-app run dev
 ```
 
-3. Open http://localhost:5173 (EN · RU · FR · AR at the top). In **Agents** open "Invoice agent", go to **Key**, press **Create key** and copy it: it is shown once. Each agent has its own key, limits, working hours and payees; **Create** adds another agent.
+3. Open http://localhost:5173 (language in **Settings**: EN · RU · FR · AR). In **Agents** open "Invoice agent", go to **Settings**, press **Create key** and copy it: it is shown once. Each agent has its own key, limits, working hours and payees; **+** adds another agent.
 
 4. Connect the agent with its key through the MCP Inspector, then press **Connect** in the browser:
 
