@@ -194,7 +194,7 @@ export default function Counterparties({ agent, onAgent }: Props) {
                 <li key={c.inn}>
                   <span>
                     <span className="op-payee">{c.name}</span>
-                    <span className="muted mono">{c.inn}</span>
+                    <span className="muted num">{c.inn}</span>
                   </span>
                   <button
                     type="button"

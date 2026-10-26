@@ -96,7 +96,7 @@ export default function Limits({ agent, onAgent }: Props) {
             <label className="field" key={period}>
               <span className="field-label">
                 {t.limit[period]}
-                {spent !== null && <small className="mono">{t.spentNow(rub(spent))}</small>}
+                {spent !== null && <small>{t.spentNow(rub(spent))}</small>}
               </span>
               <span className="money-input">
                 <input

@@ -56,7 +56,7 @@ export default function AgentSettings({ agent, onAgent, onChanged }: Props) {
     <section className="card settings-card">
       <div className="srow">
         <span className="srow-name">{t.keyLabel}</span>
-        <span className="mono muted srow-value" dir="ltr">
+        <span className="muted num srow-value" dir="ltr">
           {!agent.key_hint ? "—" : agent.key_hint.includes("…") ? agent.key_hint : `…${agent.key_hint}`}
         </span>
         <button
@@ -72,7 +72,7 @@ export default function AgentSettings({ agent, onAgent, onChanged }: Props) {
       </div>
       {key && (
         <div className="fresh-key">
-          <div className="key-value mono" tabIndex={0} onFocus={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>
+          <div className="key-value num" tabIndex={0} onFocus={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>
             {key}
           </div>
           <p className="muted">

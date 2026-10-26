@@ -111,7 +111,7 @@ export default function App() {
 
           {toast && (
             <button type="button" className="toast" onClick={() => { openTab("history"); setToastId(null); }}>
-              <b className={`status-${toast.status}`}>{t.toast[toast.status]}</b>
+              <b>{t.toast[toast.status]}</b>
               <span>
                 {toast.agent_name} → {toast.payee} · {rub(toast.amount_kopecks)}
               </span>

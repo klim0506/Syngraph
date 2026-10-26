@@ -9,7 +9,7 @@ The Syngraph client app — for people at the company.
 
 Works only through the `core` API.
 
-Now: a mobile app for the demo client (id 1), no sign-in; on a large screen it is shown in a phone outline on a navy backdrop. The look follows the project presentation, kept to the minimum: navy blocks, one bright blue accent, white cards, monospaced figures; light and dark themes.
+Now: a mobile app for the demo client (id 1), no sign-in; on a large screen it is shown in a phone outline on a navy backdrop. The look follows the project presentation, kept to the minimum: navy blocks, one bright blue accent, white cards; light and dark themes. Text comes in four styles only, the same on every screen: standard, active (blue, semibold: what is chosen, buttons, links), inactive (gray: labels, dates, hints) and heading. Statuses and messages are text with a coloured dot.
 
 - **Agents** — the client's agents, each with its icon, today's spending and status; **+** adds one. An agent opens with three sections; pause is on the agent card. **Limits**: per payment, day, week and month, with what was spent under each; working days and hours; payees — "Anyone", or "Only from the list" with adding by suggestion, by INN (the name comes from the directory) or as a new one, and removal. **History**: the agent's payments with the same filters. **Settings**: the key — its start and end are shown; ↻ replaces it, and a new key is shown once, with **Copy** — the name, and the icon (tap it to choose another).
 - **History** — payments of all agents; filters by payee or INN, agent and period, and by status. A payment opens as its passport; an unconfirmed one can be checked with the bank.

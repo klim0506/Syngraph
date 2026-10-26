@@ -1,3 +1,4 @@
+import { Plus } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { addAgent, Agent, rub } from "../api";
 import { serverText, useT } from "../i18n";
@@ -38,7 +39,7 @@ export default function Agents({ agents, onOpen, onCreated }: Props) {
       <div className="title-row">
         <h1>{t.tabs.agents}</h1>
         <button type="button" className="btn-plus" aria-label={t.newAgent} title={t.newAgent} aria-expanded={adding} onClick={() => setAdding(!adding)}>
-          +
+          <Plus size={18} strokeWidth={2} aria-hidden />
         </button>
       </div>
 
@@ -66,7 +67,7 @@ export default function Agents({ agents, onOpen, onCreated }: Props) {
                 <AgentBadge icon={a.icon} size={44} />
                 <span>
                   <span className="agent-title">{a.name}</span>
-                  <span className="muted mono">{t.spentToday(rub(a.spent.day), rub(a.limits.day))}</span>
+                  <span className="muted num">{t.spentToday(rub(a.spent.day), rub(a.limits.day))}</span>
                   <span className={`dot-state ${a.has_key ? `state-${state}` : ""}`}>{a.has_key ? t.state[state] : t.noKey}</span>
                 </span>
               </button>

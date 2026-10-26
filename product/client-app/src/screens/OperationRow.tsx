@@ -43,27 +43,27 @@ export default function OperationRow({ operation: o, showAgent = false, onChange
           <span className="op-amount" dir="ltr">
             {rub(o.amount_kopecks)}
           </span>
-          <span className={`pill pill-${o.status}`}>{t.status[o.status]}</span>
+          <span className={`dot-state state-${o.status}`}>{t.status[o.status]}</span>
         </span>
       </button>
       {open && (
         <div className="passport">
           <div className="passport-head">
-            <div className="mono-label">
+            <div className="muted">
               {t.passport} · {o.id.slice(-8).toUpperCase()}
             </div>
             <div className="passport-title">
               <span>
                 {rub(o.amount_kopecks)} → {o.payee}
               </span>
-              <span className={`pill pill-${o.status}`}>{t.status[o.status]}</span>
+              <span className={`dot-state state-${o.status}`}>{t.status[o.status]}</span>
             </div>
           </div>
           <dl className="passport-rows">
             <dt>{t.agent}</dt>
             <dd>{o.agent_name}</dd>
             <dt>{t.inn}</dt>
-            <dd className="mono">{o.payee_inn}</dd>
+            <dd className="num">{o.payee_inn}</dd>
             {reason && (
               <>
                 <dt>{t.reason}</dt>
@@ -71,7 +71,7 @@ export default function OperationRow({ operation: o, showAgent = false, onChange
               </>
             )}
             <dt>{t.operation}</dt>
-            <dd className="mono">
+            <dd className="num">
               {when(o.created_at, t.locale)} · {o.id}
             </dd>
           </dl>
