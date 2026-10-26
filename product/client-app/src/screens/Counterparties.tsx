@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   addCounterparty,
   Agent,
+  ApiError,
   changeAgent,
   Counterparty,
   findByInn,
@@ -30,8 +31,9 @@ export default function Counterparties({ agent, onAgent }: Props) {
   const [lookup, setLookup] = useState<Lookup>("idle");
   const [name, setName] = useState("");
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(""); // the core's message; translated when shown
-  const latestInn = useRef(""); // ignores directory answers for an INN the person has already changed
+  const lookupVersion = useRef(0); // ignores answers after the person changes or picks an INN
 
   async function reload() {
     setCounterparties(await getCounterparties(agent.id));
@@ -47,16 +49,17 @@ export default function Counterparties({ agent, onAgent }: Props) {
     setDirectory(null);
     setLookup("idle");
     setName("");
-    latestInn.current = "";
+    lookupVersion.current += 1;
   }
 
   function type(value: string) {
     setInn(value);
     setPicked(null);
     setDirectory(null);
+    setName("");
     setError("");
     setOpen(true);
-    latestInn.current = value;
+    const version = ++lookupVersion.current;
     if (!FULL_INN.test(value.trim())) {
       setLookup("idle");
       return;
@@ -64,12 +67,19 @@ export default function Counterparties({ agent, onAgent }: Props) {
     setLookup("searching");
     findByInn(value.trim()).then(
       (found) => {
-        if (latestInn.current !== value) return;
+        if (lookupVersion.current !== version) return;
         setDirectory(found);
         setLookup(found ? "known" : "unknown");
       },
-      () => {
-        if (latestInn.current === value) setLookup("unknown"); // an invalid INN: the core says why on Add
+      (err: Error) => {
+        if (lookupVersion.current !== version) return;
+        if (err instanceof ApiError && err.status === 400) {
+          setLookup("unknown"); // invalid INNs are explained only when Add is pressed
+          return;
+        }
+        // A failed lookup is not proof that the directory has no such payee.
+        setLookup("idle");
+        setError(err.message);
       },
     );
   }
@@ -77,16 +87,20 @@ export default function Counterparties({ agent, onAgent }: Props) {
   function pick(c: Counterparty) {
     setPicked(c);
     setInn(c.inn);
-    latestInn.current = c.inn;
+    lookupVersion.current += 1;
     setOpen(false);
   }
 
   async function act(action: () => Promise<unknown>) {
+    if (busy) return;
+    setBusy(true);
     setError("");
     try {
       await action();
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -112,13 +126,15 @@ export default function Counterparties({ agent, onAgent }: Props) {
   return (
     <>
       <div className="segmented segmented-flush" role="group" aria-label={t.payees}>
-        <button type="button" aria-pressed={agent.any_counterparty} onClick={() => act(async () => onAgent(await changeAgent(agent.id, { any_counterparty: true })))}>
+        <button type="button" disabled={busy} aria-pressed={agent.any_counterparty} onClick={() => act(async () => onAgent(await changeAgent(agent.id, { any_counterparty: true })))}>
           {t.anyone}
         </button>
-        <button type="button" aria-pressed={!agent.any_counterparty} onClick={() => act(async () => onAgent(await changeAgent(agent.id, { any_counterparty: false })))}>
+        <button type="button" disabled={busy} aria-pressed={!agent.any_counterparty} onClick={() => act(async () => onAgent(await changeAgent(agent.id, { any_counterparty: false })))}>
           {t.onlyList}
         </button>
       </div>
+
+      {error && <div className="error" role="alert">{serverText(t, error)}</div>}
 
       {!agent.any_counterparty && ( // with "Anyone" the list is not checked, so it is not shown
         <>
@@ -130,6 +146,7 @@ export default function Counterparties({ agent, onAgent }: Props) {
               <input
                 id="payee-inn"
                 value={inn}
+                disabled={busy}
                 onChange={(e) => type(e.target.value)}
                 onFocus={() => setOpen(true)}
                 onBlur={() => setOpen(false)}
@@ -151,7 +168,7 @@ export default function Counterparties({ agent, onAgent }: Props) {
                       className={c.allowed ? "off" : undefined}
                       onMouseDown={(e) => {
                         e.preventDefault(); // keep the focus, or blur closes the list before the click
-                        if (!c.allowed) pick(c);
+                        if (!busy && !c.allowed) pick(c);
                       }}
                     >
                       <span>{c.name}</span>
@@ -167,17 +184,12 @@ export default function Counterparties({ agent, onAgent }: Props) {
                 <label className="field-label" htmlFor="payee-name">
                   {t.nameLabel}
                 </label>
-                <input id="payee-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t.newPayeeName} maxLength={160} autoFocus />
+                <input id="payee-name" disabled={busy} value={name} onChange={(e) => setName(e.target.value)} placeholder={t.newPayeeName} maxLength={160} autoFocus />
               </>
             )}
-            <button className="btn-primary" type="submit" disabled={!canAdd}>
+            <button className="btn-primary" type="submit" disabled={busy || !canAdd}>
               {t.addPayee}
             </button>
-            {error && (
-              <div className="error" role="alert">
-                {serverText(t, error)}
-              </div>
-            )}
           </form>
 
           <section className="card list">
@@ -196,6 +208,7 @@ export default function Counterparties({ agent, onAgent }: Props) {
                     <button
                       type="button"
                       className="remove"
+                      disabled={busy}
                       onClick={() => act(async () => { await removeCounterparty(agent.id, c.inn); await reload(); })}
                       aria-label={t.removeName(c.name)}
                       title={t.remove}

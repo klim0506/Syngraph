@@ -8,7 +8,7 @@ The agent connects with its own key, created in the client app: `SYNGRAPH_AGENT_
 
 Tools now: `pay_invoice(payee, payee_inn, amount)` and `get_payment_status(operation_id)`.
 
-MCP function descriptions live here — `developer-docs/` and the `sdk-python/` types are generated from them.
+MCP function descriptions live here. Generating `developer-docs/` and `sdk-python/` types from them is planned.
 
 - `src/` — code
 - `data/` — data

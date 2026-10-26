@@ -20,6 +20,8 @@ type Draft = {
   to: string;
 };
 
+type Edits = Partial<Omit<Draft, "limits">> & { limits: Partial<Record<Period, string>> };
+
 function draftOf(a: Agent): Draft {
   return {
     limits: {
@@ -53,7 +55,9 @@ type Props = { agent: Agent; onAgent: (a: Agent) => void };
 export default function Limits({ agent, onAgent }: Props) {
   const t = useT();
   const saved = draftOf(agent);
-  const [draft, setDraft] = useState<Draft>(saved);
+  const [edits, setEdits] = useState<Edits>({ limits: {} });
+  // Polling updates untouched fields without overwriting the person's edits.
+  const draft: Draft = { ...saved, ...edits, limits: { ...saved.limits, ...edits.limits } };
   const [busy, setBusy] = useState(false);
   // "saved", or the core's error to show in the current language
   const [message, setMessage] = useState<{ ok: true } | { ok: false; error: string } | null>(null);
@@ -62,7 +66,16 @@ export default function Limits({ agent, onAgent }: Props) {
   const messageText = message && (message.ok ? t.saved : serverText(t, message.error));
 
   function edit(next: Draft) {
-    setDraft(next);
+    const limits: Edits["limits"] = {};
+    for (const period of PERIODS) {
+      if (next.limits[period] !== saved.limits[period]) limits[period] = next.limits[period];
+    }
+    setEdits({
+      limits,
+      ...(next.days.join() !== saved.days.join() ? { days: next.days } : {}),
+      ...(next.from !== saved.from ? { from: next.from } : {}),
+      ...(next.to !== saved.to ? { to: next.to } : {}),
+    });
     setMessage(null);
   }
 
@@ -73,11 +86,12 @@ export default function Limits({ agent, onAgent }: Props) {
 
   async function save(e: FormEvent) {
     e.preventDefault();
+    if (busy || !dirty) return;
     setBusy(true);
     try {
       const updated = await changeAgent(agent.id, change);
       onAgent(updated);
-      setDraft(draftOf(updated));
+      setEdits({ limits: {} });
       setMessage({ ok: true });
     } catch (err) {
       setMessage({ ok: false, error: (err as Error).message });
@@ -103,6 +117,7 @@ export default function Limits({ agent, onAgent }: Props) {
                   inputMode="decimal"
                   dir="ltr"
                   value={draft.limits[period]}
+                  disabled={busy}
                   onChange={(e) => edit({ ...draft, limits: { ...draft.limits, [period]: e.target.value } })}
                   aria-label={t.inRubles(t.limit[period])}
                 />
@@ -122,7 +137,7 @@ export default function Limits({ agent, onAgent }: Props) {
       <section className="card">
         <div className="days" role="group" aria-label={t.workingHours}>
           {WEEKDAYS.map((d) => (
-            <button key={d} type="button" aria-pressed={draft.days.includes(d)} aria-label={t.days[d]} title={t.days[d]} onClick={() => toggleDay(d)}>
+            <button key={d} type="button" disabled={busy} aria-pressed={draft.days.includes(d)} aria-label={t.days[d]} title={t.days[d]} onClick={() => toggleDay(d)}>
               {t.dayLetters[d]}
             </button>
           ))}
@@ -130,11 +145,11 @@ export default function Limits({ agent, onAgent }: Props) {
         <div className="hours">
           <label>
             {t.from}
-            <input type="time" value={draft.from} onChange={(e) => edit({ ...draft, from: e.target.value })} />
+            <input type="time" disabled={busy} value={draft.from} onChange={(e) => edit({ ...draft, from: e.target.value })} />
           </label>
           <label>
             {t.to}
-            <input type="time" value={draft.to} onChange={(e) => edit({ ...draft, to: e.target.value })} />
+            <input type="time" disabled={busy} value={draft.to} onChange={(e) => edit({ ...draft, to: e.target.value })} />
           </label>
         </div>
       </section>

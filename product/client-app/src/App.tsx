@@ -23,6 +23,9 @@ export default function App() {
   const [offline, setOffline] = useState(false);
   const [toastId, setToastId] = useState<string | null>(null); // the newest agent payment, shown with its current status
   const seen = useRef<Set<string> | null>(null); // operation ids already shown; null until the first load
+  const refreshing = useRef(false);
+  const refreshAgain = useRef(false);
+  const agentRevision = useRef(0);
   const t = LANGUAGES[lang];
 
   useEffect(() => {
@@ -34,18 +37,36 @@ export default function App() {
   useEffect(() => applyTheme(theme), [theme]);
 
   const refresh = useCallback(async () => {
+    if (refreshing.current) {
+      refreshAgain.current = true;
+      return;
+    }
+    refreshing.current = true;
     try {
-      const [a, ops] = await Promise.all([getAgents(), getOperations()]);
-      setAgents(a);
-      setOperations(ops);
-      setOffline(false);
-      if (seen.current) {
-        const fresh = ops.find((o) => !seen.current!.has(o.id)); // newest first
-        if (fresh) setToastId(fresh.id);
-      }
-      seen.current = new Set(ops.map((o) => o.id));
-    } catch {
-      setOffline(true);
+      do {
+        refreshAgain.current = false;
+        const revision = agentRevision.current;
+        try {
+          const [agentsResult, operationsResult] = await Promise.allSettled([getAgents(), getOperations()]);
+          if (agentsResult.status === "rejected") throw agentsResult.reason;
+          if (operationsResult.status === "rejected") throw operationsResult.reason;
+          const a = agentsResult.value;
+          const ops = operationsResult.value;
+          // A mutation may have finished after this snapshot was requested.
+          if (revision === agentRevision.current) setAgents(a);
+          setOperations(ops);
+          setOffline(false);
+          if (seen.current) {
+            const fresh = ops.find((o) => !seen.current!.has(o.id)); // newest first
+            if (fresh) setToastId(fresh.id);
+          }
+          seen.current = new Set(ops.map((o) => o.id));
+        } catch {
+          setOffline(true);
+        }
+      } while (refreshAgain.current);
+    } finally {
+      refreshing.current = false;
     }
   }, []);
 
@@ -62,8 +83,10 @@ export default function App() {
   }, [toastId]);
 
   /** Puts a changed agent into the list at once, without waiting for the next refresh. */
-  const updateAgent = (changed: Agent) =>
+  const updateAgent = (changed: Agent) => {
+    agentRevision.current += 1;
     setAgents((list) => (list ? (list.some((a) => a.id === changed.id) ? list.map((a) => (a.id === changed.id ? changed : a)) : [...list, changed]) : list));
+  };
 
   const toast = toastId ? operations?.find((o) => o.id === toastId) : undefined;
   const openAgent = agentId !== null ? agents?.find((a) => a.id === agentId) : undefined;

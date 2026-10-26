@@ -2,6 +2,7 @@
 
 No sign-in yet: the client id comes in the path, so the API must listen on 127.0.0.1 only.
 """
+import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -107,6 +108,7 @@ def open_db() -> Iterator[sqlite3.Connection]:
     conn = db.connect()
     try:
         db.create_tables_and_demo_client(conn)
+        conn.commit()  # keep initialization even when this request only reads data
         yield conn
     finally:
         conn.close()
@@ -179,9 +181,11 @@ def settings_from(change: AgentChange, mandate: sqlite3.Row) -> dict[str, object
         value = getattr(change, field)
         if value is not None:
             try:
+                if not re.fullmatch(r"[0-9]{2}:[0-9]{2}", value):
+                    raise ValueError("expected HH:MM")
                 settings[field] = time.fromisoformat(value).strftime("%H:%M")
-            except ValueError:
-                raise InvalidRequest(f"{field} must be a time like '09:00', got {value!r}")
+            except ValueError as e:
+                raise InvalidRequest(f"{field} must be a time like '09:00', got {value!r}") from e
     working_from = settings.get("working_from", mandate["working_from"])
     working_to = settings.get("working_to", mandate["working_to"])
     if working_from >= working_to:
@@ -224,6 +228,8 @@ def get_agent(client_id: int, agent_id: int) -> Agent:
 @app.patch("/api/clients/{client_id}/agents/{agent_id}")
 def change_agent(client_id: int, agent_id: int, change: AgentChange) -> Agent:
     with open_db() as conn:
+        # Validate and save against the same settings, including concurrent limit changes.
+        conn.execute("BEGIN IMMEDIATE")
         agent = agent_of(conn, client_id, agent_id)
         settings = settings_from(change, agent)
         if change.name is not None:
@@ -290,6 +296,7 @@ def add_counterparty(client_id: int, agent_id: int, new: NewCounterparty) -> Cou
     """A known INN keeps the directory name; the name in the request is used only for a new INN."""
     check_inn(new.inn)
     with open_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")  # another request may be adding the same INN
         agent = agent_of(conn, client_id, agent_id)
         row = db.find_counterparty(conn, new.inn)
         if row is None:

@@ -4,8 +4,7 @@ The Syngraph core.
 
 - Agents and their mandates: limits, working hours, payees, pause; later categories and when human validation is required.
 - Operation journal: a record is created before the bank is called, after that only its status changes; the result is a payment passport.
-- Notifications to agents at their address (webhooks).
-- Adapter to the client's bank via the Bank of Russia Open API: `bank-sandbox` for now, a real bank later.
+- Bank adapter for the sandbox's HTTP API. Real bank adapters and notifications to agents (webhooks) are planned.
 
 Entry points to the core: `mcp-server` (agents) and `client-app` (people).
 
@@ -26,12 +25,14 @@ SQLite, `data/syngraph.db` (not in git):
 
 Limits count `paid`, `pending` and `unknown` payments. Every bank order carries the operation id: the bank does not pay one id twice, and an `unknown` payment is asked again from the bank — `paid` if it was made, `rejected` if the bank never received it. An empty database gets a demo client (id 1) with one agent whose mandate comes from `rules.example.json`; an older database gets new tables and columns on open.
 
+Checking the mandate and reserving the payment amount happen in one SQLite write transaction. The bank call starts after that transaction commits. If the process stops before saving the bank's response, an operation can remain `pending`; automatic recovery of that state is not implemented, and it continues to count toward limits.
+
 ## HTTP API for client-app
 
 `api.py` (FastAPI), run with `python -m uvicorn core.api:app --port 8000`, all under `/api/clients/{id}`:
 
 - `GET`, `POST /agents` — the agents with their rules and spending; a new agent;
-- `GET`, `PATCH /agents/{agent}` — name, icon, pause, "any / only listed", working days and hours, limits in rubles that must grow per payment <= day <= week <= month;
+- `GET`, `PATCH /agents/{agent}` — name, icon, pause, "any / only listed", working days and local times in `HH:MM` format, limits in rubles that must grow per payment <= day <= week <= month;
 - `POST /agents/{agent}/key` — a new key, returned only here;
 - `GET`, `POST /agents/{agent}/counterparties`, `DELETE .../{inn}` — the agent's payees; `GET /api/counterparties/{inn}` looks up the shared directory by exact INN only;
 - `GET /operations?agent_id=` — payments of all agents or of one; `POST /operations/{op}/check` asks the bank again.

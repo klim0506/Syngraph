@@ -129,8 +129,15 @@ MANDATE_SETTINGS = {
 
 
 def create_tables_and_demo_client(conn: sqlite3.Connection) -> None:
-    """Creates missing tables and columns; an empty database gets one client with a mandate from rules.example.json."""
-    conn.executescript(SCHEMA)
+    """Initializes the database atomically; the caller must commit before using it."""
+    conn.execute("BEGIN IMMEDIATE")
+    # executescript would commit first and release the initialization lock.
+    statement = ""
+    for line in SCHEMA.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            conn.execute(statement)
+            statement = ""
     for table, columns in ADDED_COLUMNS.items():
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         for column, definition in columns.items():

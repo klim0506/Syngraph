@@ -1,8 +1,10 @@
 # Syngraph
 
-A payment layer for companies' AI agents: an agent pays from the company account strictly within the limits the client has set
+A payment layer for companies' AI agents: an agent pays from the company account within the limits the client has set.
 
-Syngraph sits between the agent and any bank. We hold the agent's mandate, the rules, human validation and the operation journal. The bank only executes payments — through its business API or the Bank of Russia Open API. The MVP covers paying supplier invoices (B2B) from the bank where the client already holds its account. Card payments on websites come later.
+The current prototype checks an agent's mandate, records each operation and sends permitted payments to an in-memory bank sandbox. It includes agent keys, limits, working hours, payee lists, status checks and a client app.
+
+The target is B2B supplier payments from the client's existing bank account, through a bank's business API or the Bank of Russia Open API. Real bank integration, human approval, webhooks and card payments are planned; the sandbox does not implement the Bank of Russia Open API.
 
 ```
  company agent             demo/agent/ · developers/sdk-python/
@@ -14,9 +16,9 @@ Syngraph sits between the agent and any bank. We hold the agent's mandate, the r
       ▼
  Syngraph core   ◀───────  client app
  product/core/             product/client-app/
- mandate · rules · journal (approvals, journal)
+ mandate · rules · journal (settings, journal)
       │
-      │ Bank of Russia Open API
+      │ sandbox HTTP API
       ▼
  client's own bank         demo/bank-sandbox/ — sandbox, later real banks
 ```
@@ -25,26 +27,28 @@ Syngraph sits between the agent and any bank. We hold the agent's mandate, the r
 
 | Block | Role |
 |---|---|
-| [`core/`](product/core/) | Core: mandates, rules, journal, agent notifications, bank adapter |
+| [`core/`](product/core/) | Core: mandates, rules, journal, bank adapter |
 | [`mcp-server/`](product/mcp-server/) | MCP server — the entry point for AI agents, forwards calls to the core |
-| [`client-app/`](product/client-app/) | Client app: connect an agent, set up a mandate, approve a payment, view the journal |
+| [`client-app/`](product/client-app/) | Client app: connect an agent, set up a mandate, view the journal |
 
 **`developers/` — for third-party developers**
 
 | Block | Role |
 |---|---|
-| [`sdk-python/`](developers/sdk-python/) | Python library: connect an agent in a few lines |
-| [`developer-docs/`](developers/developer-docs/) | Service documentation: MCP, library, security, `llms.txt` |
+| [`sdk-python/`](developers/sdk-python/) | Planned Python library: connect an agent in a few lines |
+| [`developer-docs/`](developers/developer-docs/) | Planned service documentation: MCP, library, security, `llms.txt` |
 
 **`demo/` — showing how it all works**
 
 | Block | Role |
 |---|---|
-| [`agent/`](demo/agent/) | Demo agent: paying invoices (B2B) and paying by card on websites |
-| [`bank-sandbox/`](demo/bank-sandbox/) | Bank sandbox with the Bank of Russia Open API; later replaced by a real bank |
-| [`shop/`](demo/shop/) | Test online shop for card payments (after MVP) |
+| [`agent/`](demo/agent/) | Planned demo agent for invoice and card payments |
+| [`bank-sandbox/`](demo/bank-sandbox/) | Minimal HTTP payment sandbox; a real bank adapter comes later |
+| [`shop/`](demo/shop/) | Planned test online shop for card payments (after MVP) |
 
 ## Run locally
+
+Requires Python 3.11 or newer, uv, and Node.js 18 or newer with npm.
 
 An agent's MCP call goes through the Syngraph core (its mandate, the journal) to the bank sandbox; the client app shows it and changes the rules. Commands are run from the repository root, each server in its own terminal; on macOS/Linux use `.venv/bin/python` instead of `.venv/Scripts/python`.
 

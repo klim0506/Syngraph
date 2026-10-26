@@ -50,7 +50,9 @@ def get_payment(operation_id: str) -> BankReply | None:
 
 def read_reply(response: httpx.Response) -> BankReply:
     reply = response.json()
-    bank_id, status = str(reply["id"]), reply["status"]
+    bank_id, status = reply["id"], reply["status"]
+    if not isinstance(bank_id, str) or not bank_id.strip():
+        raise ValueError("bank payment id must be a non-empty string")
     if status != "paid":
         raise ValueError(f"unexpected bank status {status!r}")
     return {"id": bank_id, "status": status}

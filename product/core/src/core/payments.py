@@ -29,11 +29,13 @@ def pay(agent_key: str, payee: str, payee_inn: str, amount: str) -> PaymentResul
     kopecks = to_kopecks(amount)
     payee = check_payee(payee)
     check_inn(payee_inn)
-    now = datetime.now(timezone.utc)
-
     conn = db.connect()
     try:
         db.create_tables_and_demo_client(conn)
+        conn.commit()
+        # Check the current mandate and reserve its limits in one write transaction.
+        conn.execute("BEGIN IMMEDIATE")
+        now = datetime.now(timezone.utc)
         mandate = agent_by_key(conn, agent_key)
         # A known INN keeps the directory name: the bank and the journal get the same details.
         counterparty = db.get_or_create_counterparty(conn, payee_inn, payee)
@@ -78,6 +80,7 @@ def get_status(agent_key: str, operation_id: str) -> PaymentResult:
     conn = db.connect()
     try:
         db.create_tables_and_demo_client(conn)
+        conn.commit()
         agent = agent_by_key(conn, agent_key)
         row = db.find_mandate_transaction(conn, agent["id"], operation_id)
         if row is None:

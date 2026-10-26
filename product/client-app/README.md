@@ -3,9 +3,10 @@
 The Syngraph client app — for people at the company.
 
 - Connect an agent and issue it a mandate.
-- Approve or reject a payment when human validation is required.
 - View the operation journal and payment passports.
 - Suspend an agent instantly.
+
+Human approval of payments is planned.
 
 Works only through the `core` API.
 
