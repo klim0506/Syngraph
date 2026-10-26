@@ -256,3 +256,4 @@ input::placeholder { color: var(--muted); }
 .lang-list button:hover, .lang-list button:focus { background: var(--blue-soft); outline: none; }
 .lang-list [aria-selected="true"] button { font: var(--text-strong); color: var(--blue); }
 .flag { display: inline-flex; flex: none; border-radius: 2px; overflow: hidden; box-shadow: 0 0 0 1px rgba(13, 24, 48, .12); }
+.picked { padding: 2px 0; }
