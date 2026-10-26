@@ -46,30 +46,43 @@ Syngraph sits between the agent and any bank. We hold the agent's mandate, the r
 
 ## Run locally
 
-An MCP call goes through the Syngraph core (mandate checks, journal) to the bank sandbox. Commands are run from the repository root; on macOS/Linux use `.venv/bin/python` instead of `.venv/Scripts/python`.
+An agent's MCP call goes through the Syngraph core (its mandate, the journal) to the bank sandbox; the client app shows it and changes the rules. Commands are run from the repository root, each server in its own terminal; on macOS/Linux use `.venv/bin/python` instead of `.venv/Scripts/python`.
 
 1. Install:
 
 ```bash
 uv venv .venv
 uv pip install --python .venv -r demo/bank-sandbox/requirements.txt -r product/mcp-server/requirements.txt -e product/core
+npm --prefix product/client-app install
 ```
 
-2. Start the bank sandbox and keep it running:
+2. Start the bank sandbox, the core API and the client app:
 
 ```bash
 .venv/Scripts/python -m uvicorn app:app --app-dir demo/bank-sandbox/src --port 8001
 ```
 
-3. In a second terminal open the MCP Inspector, then press **Connect** in the browser:
-
 ```bash
-npx @modelcontextprotocol/inspector .venv/Scripts/python product/mcp-server/src/server.py
+.venv/Scripts/python -m uvicorn core.api:app --port 8000
 ```
 
-4. In **Tools** call `pay_invoice` with `client_id` = 1, a payee, the payee's INN (10 or 12 digits with valid check digits, e.g. `7707083893`) and an amount in rubles as a string, e.g. `"245000.00"`. The response holds an operation id, the payee name sent to the bank and `"status": "paid"`; `"rejected"` with a reason; or `"unknown"` if the bank did not answer. `get_payment_status` with the same `client_id` and that operation id returns the operation again; for `"unknown"` it asks the bank first and turns it into `"paid"` or `"rejected"` (the bank never received it). The bank sandbox keeps payments in memory: after its restart an old `"unknown"` becomes `"rejected"`. If the database schema changed after an update, delete `syngraph.db`.
+```bash
+npm --prefix product/client-app run dev
+```
 
-Data lives in SQLite, `product/core/data/syngraph.db` (not in git). On first use it gets a demo client (id 1) and a mandate from `product/core/rules.example.json`: weekdays 09:00–19:00 Moscow time, any counterparty, up to 100,000 RUB per payment, 500,000 per day, 1,500,000 per week, 3,000,000 per month. To change the rules, edit the `mandates` table (e.g. in DB Browser for SQLite); outside working hours every payment is rejected. To start from scratch, delete `syngraph.db`.
+3. Open http://localhost:5173 (EN · RU · FR · AR at the top). In **Agents** open "Invoice agent", go to **Key**, press **Create key** and copy it: it is shown once. Each agent has its own key, limits, working hours and payees; **Create** adds another agent.
+
+4. Connect the agent with its key through the MCP Inspector, then press **Connect** in the browser:
+
+```bash
+npx @modelcontextprotocol/inspector -e SYNGRAPH_AGENT_KEY=sgk_... .venv/Scripts/python product/mcp-server/src/server.py
+```
+
+5. In **Tools** call `pay_invoice` with a payee, the payee's INN (10 or 12 digits with valid check digits, e.g. `7707083893`) and an amount in rubles as a string, e.g. `"25000.00"`. The response holds an operation id, the payee name sent to the bank and `"status": "paid"`; `"rejected"` with a reason; or `"unknown"` if the bank did not answer. The payment pops up in the app. `get_payment_status` with that operation id returns it again; for `"unknown"` it asks the bank first. Without a valid key both tools refuse.
+
+Demo: pause the agent, lower its per-payment limit or switch **Payees** to **Only from the list** in the app — the next `pay_invoice` returns `"rejected"` with the reason. **Replace key** turns the old key off at once.
+
+Data lives in SQLite, `product/core/data/syngraph.db` (not in git). On first use it gets a demo client (id 1) with "Invoice agent" and its mandate from `product/core/rules.example.json`: weekdays 09:00–19:00 Moscow time, any payee, up to 100,000 RUB per payment, 500,000 per day, 1,500,000 per week, 3,000,000 per month; new agents start with the same rules. An older database is brought up to date on open. To start from scratch, delete `syngraph.db`. The bank sandbox keeps payments in memory: after its restart an old `"unknown"` becomes `"rejected"`.
 
 ## License
 

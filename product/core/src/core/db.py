@@ -1,4 +1,4 @@
-"""SQLite storage: clients, their mandates, counterparties and transactions.
+"""SQLite storage: clients, their agents with mandates, counterparties and transactions.
 
 Functions here never commit: the caller decides where a database transaction ends.
 """
@@ -29,7 +29,17 @@ CREATE TABLE IF NOT EXISTS mandates (
     max_payment_kopecks INTEGER NOT NULL,
     max_day_kopecks     INTEGER NOT NULL,
     max_week_kopecks    INTEGER NOT NULL,
-    max_month_kopecks   INTEGER NOT NULL
+    max_month_kopecks   INTEGER NOT NULL,
+    paused              INTEGER NOT NULL DEFAULT 0  -- 1: the client stopped the agent, every payment is rejected
+);
+CREATE TABLE IF NOT EXISTS agents (  -- a client's AI agent; each has its own mandate and its own key
+    id          INTEGER PRIMARY KEY,
+    client_id   INTEGER NOT NULL REFERENCES clients(id),
+    mandate_id  INTEGER NOT NULL UNIQUE REFERENCES mandates(id),
+    name        TEXT    NOT NULL,         -- "Invoice agent"
+    secret_hash TEXT    UNIQUE,           -- SHA-256 of the agent's key; the key itself is never stored
+    secret_hint TEXT,                     -- last characters of the key, to tell keys apart
+    created_at  TEXT    NOT NULL
 );
 CREATE TABLE IF NOT EXISTS counterparties (  -- shared by all clients: one row per organisation
     id         INTEGER PRIMARY KEY,
@@ -89,19 +99,71 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the first release: an older database gets them on open.
+ADDED_COLUMNS = {
+    "mandates": {"paused": "INTEGER NOT NULL DEFAULT 0"},
+}
+DEFAULT_AGENT_NAME = "Invoice agent"
+# The agent's settings joined with its mandate: rules read the mandate columns, `id` is the mandate id.
+AGENT_SELECT = (
+    "SELECT m.*, a.id AS agent_id, a.name AS agent_name, a.secret_hint, a.created_at AS agent_created_at"
+    " FROM agents a JOIN mandates m ON m.id = a.mandate_id"
+)
+# What the client may change in a mandate; anything else is never written from outside.
+MANDATE_SETTINGS = {
+    "working_days",
+    "working_from",
+    "working_to",
+    "any_counterparty",
+    "max_payment_kopecks",
+    "max_day_kopecks",
+    "max_week_kopecks",
+    "max_month_kopecks",
+    "paused",
+}
+
+
 def create_tables_and_demo_client(conn: sqlite3.Connection) -> None:
-    """Creates missing tables; an empty database gets one client with a mandate from rules.example.json."""
+    """Creates missing tables and columns; an empty database gets one client with a mandate from rules.example.json."""
     conn.executescript(SCHEMA)
+    for table, columns in ADDED_COLUMNS.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, definition in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    for mandate in conn.execute(  # an older database had mandates without agents
+        "SELECT id, client_id FROM mandates WHERE id NOT IN (SELECT mandate_id FROM agents)"
+    ).fetchall():
+        insert_agent_row(conn, mandate["client_id"], mandate["id"], DEFAULT_AGENT_NAME)
     if conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 0:
         insert_demo_client(conn)
 
 
 def insert_demo_client(conn: sqlite3.Connection) -> None:
+    """One client with one agent; its mandate comes from rules.example.json."""
     rules = json.loads(DEFAULT_MANDATE.read_text(encoding="utf-8"))
     conn.execute(
         "INSERT INTO clients (id, name, created_at) VALUES (?, ?, ?)",
         (rules["client_id"], "Demo company", now_utc()),
     )
+    create_agent(conn, rules["client_id"], DEFAULT_AGENT_NAME)
+
+
+def create_agent(conn: sqlite3.Connection, client_id: int, name: str) -> int:
+    """A new agent without a key, with the default mandate from rules.example.json. Returns the agent id."""
+    mandate_id = insert_default_mandate(conn, client_id)
+    return insert_agent_row(conn, client_id, mandate_id, name)
+
+
+def insert_agent_row(conn: sqlite3.Connection, client_id: int, mandate_id: int, name: str) -> int:
+    return conn.execute(
+        "INSERT INTO agents (client_id, mandate_id, name, created_at) VALUES (?, ?, ?, ?)",
+        (client_id, mandate_id, name, now_utc()),
+    ).lastrowid
+
+
+def insert_default_mandate(conn: sqlite3.Connection, client_id: int) -> int:
+    rules = json.loads(DEFAULT_MANDATE.read_text(encoding="utf-8"))
     hours = rules["working_hours"]
     allowed = rules["allowed_counterparties"]
     cur = conn.execute(
@@ -110,7 +172,7 @@ def insert_demo_client(conn: sqlite3.Connection) -> None:
         " VALUES (:client_id, :timezone, :working_days, :working_from, :working_to,"
         " :any_counterparty, :max_payment_kopecks, :max_day_kopecks, :max_week_kopecks, :max_month_kopecks)",
         {
-            "client_id": rules["client_id"],
+            "client_id": client_id,
             "timezone": rules["timezone"],
             "working_days": ",".join(hours["days"]),
             "working_from": hours["from"],
@@ -129,13 +191,32 @@ def insert_demo_client(conn: sqlite3.Connection) -> None:
                 "INSERT INTO mandate_counterparties (mandate_id, counterparty_id) VALUES (?, ?)",
                 (cur.lastrowid, counterparty["id"]),
             )
+    return cur.lastrowid
 
 
-def first_mandate(conn: sqlite3.Connection, client_id: int) -> sqlite3.Row | None:
-    """The client's first mandate; choosing between a client's mandates comes with agents."""
-    return conn.execute(
-        "SELECT * FROM mandates WHERE client_id = ? ORDER BY id LIMIT 1", (client_id,)
-    ).fetchone()
+def client_agents(conn: sqlite3.Connection, client_id: int) -> list[sqlite3.Row]:
+    return conn.execute(f"{AGENT_SELECT} WHERE a.client_id = ? ORDER BY a.id", (client_id,)).fetchall()
+
+
+def find_agent(conn: sqlite3.Connection, client_id: int, agent_id: int) -> sqlite3.Row | None:
+    """The agent if it belongs to the client."""
+    return conn.execute(f"{AGENT_SELECT} WHERE a.client_id = ? AND a.id = ?", (client_id, agent_id)).fetchone()
+
+
+def agent_by_secret_hash(conn: sqlite3.Connection, secret_hash: str) -> sqlite3.Row | None:
+    return conn.execute(f"{AGENT_SELECT} WHERE a.secret_hash = ?", (secret_hash,)).fetchone()
+
+
+def set_agent_secret(conn: sqlite3.Connection, agent_id: int, secret_hash: str, secret_hint: str) -> None:
+    """Replaces the agent's key: the old one stops working at once."""
+    conn.execute(
+        "UPDATE agents SET secret_hash = ?, secret_hint = ? WHERE id = ?",
+        (secret_hash, secret_hint, agent_id),
+    )
+
+
+def rename_agent(conn: sqlite3.Connection, agent_id: int, name: str) -> None:
+    conn.execute("UPDATE agents SET name = ? WHERE id = ?", (name, agent_id))
 
 
 def find_counterparty(conn: sqlite3.Connection, inn: str) -> sqlite3.Row | None:
@@ -152,6 +233,46 @@ def get_or_create_counterparty(conn: sqlite3.Connection, inn: str, name: str) ->
         )
         row = find_counterparty(conn, inn)
     return row
+
+
+def mandate_counterparties(conn: sqlite3.Connection, mandate_id: int) -> list[sqlite3.Row]:
+    """Whom the mandate may pay, plus whom it has already paid. `allowed` tells them apart."""
+    return conn.execute(
+        "SELECT c.inn, c.name,"
+        " EXISTS (SELECT 1 FROM mandate_counterparties mc"
+        "         WHERE mc.mandate_id = :mandate_id AND mc.counterparty_id = c.id) AS allowed"
+        " FROM counterparties c"
+        " WHERE c.id IN (SELECT counterparty_id FROM mandate_counterparties WHERE mandate_id = :mandate_id)"
+        "    OR c.id IN (SELECT counterparty_id FROM transactions WHERE mandate_id = :mandate_id AND status = 'paid')"
+        " ORDER BY c.name",
+        {"mandate_id": mandate_id},
+    ).fetchall()
+
+
+def allow_counterparty(conn: sqlite3.Connection, mandate_id: int, counterparty_id: int) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO mandate_counterparties (mandate_id, counterparty_id) VALUES (?, ?)",
+        (mandate_id, counterparty_id),
+    )
+
+
+def disallow_counterparty(conn: sqlite3.Connection, mandate_id: int, inn: str) -> None:
+    """Removes the counterparty from the mandate's list; the directory keeps it."""
+    conn.execute(
+        "DELETE FROM mandate_counterparties"
+        " WHERE mandate_id = ? AND counterparty_id = (SELECT id FROM counterparties WHERE inn = ?)",
+        (mandate_id, inn),
+    )
+
+
+def update_mandate(conn: sqlite3.Connection, mandate_id: int, settings: dict[str, object]) -> None:
+    """Writes the given mandate settings; names come from MANDATE_SETTINGS only."""
+    unknown = set(settings) - MANDATE_SETTINGS
+    if unknown:
+        raise ValueError(f"not a mandate setting: {sorted(unknown)}")
+    if settings:
+        assignments = ", ".join(f"{name} = :{name}" for name in settings)
+        conn.execute(f"UPDATE mandates SET {assignments} WHERE id = :id", {**settings, "id": mandate_id})
 
 
 def is_allowed(conn: sqlite3.Connection, mandate_id: int, counterparty_id: int) -> bool:
@@ -189,10 +310,32 @@ def update_transaction_status(conn: sqlite3.Connection, transaction: Transaction
     )
 
 
+# A transaction with the agent that made it.
+TRANSACTION_SELECT = (
+    "SELECT t.*, a.id AS agent_id, a.name AS agent_name"
+    " FROM transactions t JOIN agents a ON a.mandate_id = t.mandate_id"
+)
+
+
 def find_transaction(conn: sqlite3.Connection, client_id: int, transaction_id: str) -> sqlite3.Row | None:
     """The transaction if it belongs to the client: one client never sees another's operations."""
     return conn.execute(
-        "SELECT t.* FROM transactions t JOIN mandates m ON m.id = t.mandate_id"
-        " WHERE t.id = ? AND m.client_id = ?",
-        (transaction_id, client_id),
+        f"{TRANSACTION_SELECT} WHERE t.id = ? AND a.client_id = ?", (transaction_id, client_id)
     ).fetchone()
+
+
+def find_mandate_transaction(conn: sqlite3.Connection, mandate_id: int, transaction_id: str) -> sqlite3.Row | None:
+    """The transaction if it was made under this mandate: an agent sees only its own operations."""
+    return conn.execute(
+        f"{TRANSACTION_SELECT} WHERE t.id = ? AND t.mandate_id = ?", (transaction_id, mandate_id)
+    ).fetchone()
+
+
+def client_transactions(
+    conn: sqlite3.Connection, client_id: int, limit: int, agent_id: int | None = None
+) -> list[sqlite3.Row]:
+    """The client's latest operations, newest first; only one agent's when `agent_id` is given."""
+    return conn.execute(
+        f"{TRANSACTION_SELECT} WHERE a.client_id = ? AND (? IS NULL OR a.id = ?) ORDER BY t.id DESC LIMIT ?",
+        (client_id, agent_id, agent_id, limit),
+    ).fetchall()

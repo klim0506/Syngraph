@@ -1,4 +1,5 @@
-"""Paying an invoice: check the mandate -> record the transaction -> send to the bank -> update its status."""
+"""Paying an invoice: find the agent by its key -> check its mandate -> record the transaction
+-> send to the bank -> update its status."""
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -6,8 +7,8 @@ from typing import NotRequired, TypedDict, cast
 
 from uuid6 import uuid7
 
-from . import bank, db, rules
-from .errors import BankUnconfirmed, InvalidRequest
+from . import bank, db, keys, rules
+from .errors import BankUnconfirmed, InvalidRequest, UnknownAgent
 from .money import CURRENCY, to_kopecks
 
 MAX_PAYEE = 160  # the payee field of a Russian payment order holds 160 characters
@@ -24,7 +25,7 @@ class PaymentResult(TypedDict):
     reason: NotRequired[str]  # why rejected or unknown
 
 
-def pay(client_id: int, payee: str, payee_inn: str, amount: str) -> PaymentResult:
+def pay(agent_key: str, payee: str, payee_inn: str, amount: str) -> PaymentResult:
     kopecks = to_kopecks(amount)
     payee = check_payee(payee)
     check_inn(payee_inn)
@@ -33,9 +34,7 @@ def pay(client_id: int, payee: str, payee_inn: str, amount: str) -> PaymentResul
     conn = db.connect()
     try:
         db.create_tables_and_demo_client(conn)
-        mandate = db.first_mandate(conn, client_id)
-        if mandate is None:
-            raise InvalidRequest(f"client {client_id} not found or has no mandate")
+        mandate = agent_by_key(conn, agent_key)
         # A known INN keeps the directory name: the bank and the journal get the same details.
         counterparty = db.get_or_create_counterparty(conn, payee_inn, payee)
         transaction: db.Transaction = {
@@ -74,21 +73,35 @@ def pay(client_id: int, payee: str, payee_inn: str, amount: str) -> PaymentResul
     return to_result(transaction)
 
 
-def get_status(client_id: int, operation_id: str) -> PaymentResult:
-    """The operation from the journal. An unknown one is asked again from the bank first."""
+def get_status(agent_key: str, operation_id: str) -> PaymentResult:
+    """One of the agent's own operations. An unknown one is asked again from the bank first."""
     conn = db.connect()
     try:
         db.create_tables_and_demo_client(conn)
-        row = db.find_transaction(conn, client_id, operation_id)
+        agent = agent_by_key(conn, agent_key)
+        row = db.find_mandate_transaction(conn, agent["id"], operation_id)
         if row is None:
-            raise InvalidRequest(f"operation {operation_id!r} not found for client {client_id}")
-        transaction = cast(db.Transaction, dict(row))
-        if transaction["status"] == "unknown" and ask_bank_again(transaction):
-            db.update_transaction_status(conn, transaction)
-            conn.commit()
+            raise InvalidRequest(f"operation {operation_id!r} not found for this agent")
+        return to_result(refresh(conn, row))
     finally:
         conn.close()
-    return to_result(transaction)
+
+
+def agent_by_key(conn: sqlite3.Connection, agent_key: str) -> sqlite3.Row:
+    """The agent with its mandate; `id` is the mandate id."""
+    agent = db.agent_by_secret_hash(conn, keys.hash_key(agent_key)) if agent_key else None
+    if agent is None:
+        raise UnknownAgent("the agent key is missing or not valid: create a key in the Syngraph app")
+    return agent
+
+
+def refresh(conn: sqlite3.Connection, row: sqlite3.Row) -> db.Transaction:
+    """The transaction; an unknown one is asked again from the bank and saved if the bank answers."""
+    transaction = cast(db.Transaction, dict(row))
+    if transaction["status"] == "unknown" and ask_bank_again(transaction):
+        db.update_transaction_status(conn, transaction)
+        conn.commit()
+    return transaction
 
 
 def ask_bank_again(transaction: db.Transaction) -> bool:

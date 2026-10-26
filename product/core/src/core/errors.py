@@ -5,6 +5,10 @@ class InvalidRequest(Exception):
     """The caller sent bad input: it can fix the request and try again."""
 
 
+class UnknownAgent(Exception):
+    """The agent key is missing, wrong or replaced: the client creates a new one in the Syngraph app."""
+
+
 class MandateMisconfigured(Exception):
     """The client's mandate settings are broken: only the client can fix them."""
 
