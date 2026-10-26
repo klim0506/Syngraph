@@ -11,7 +11,7 @@ Works only through the `core` API.
 
 Now: a mobile app for the demo client (id 1), no sign-in; on a large screen it is shown in a phone outline on a navy backdrop. The look follows the project presentation, kept to the minimum: navy blocks, one bright blue accent, white cards, monospaced figures; light and dark themes.
 
-- **Agents** — the client's agents, each with its icon, today's spending and status; **+** adds one. An agent opens with four sections: **Overview** (spent today, this week and this month against the limits, latest payments; pause is on the agent card), **Limits** (per payment, day, week, month, working days and hours), **Payees** ("Anyone / Only from the list", adding by suggestion, by INN — the name comes from the directory — or as a new one, removal), **Settings** (the agent's key — created or replaced here and shown once, with **Copy** — its name and icon).
+- **Agents** — the client's agents, each with its icon, today's spending and status; **+** adds one. An agent opens with three sections; pause is on the agent card. **Limits**: per payment, day, week and month, with what was spent under each; working days and hours; payees — "Anyone", or "Only from the list" with adding by suggestion, by INN (the name comes from the directory) or as a new one, and removal. **History**: the agent's payments with the same filters. **Settings**: the key (created or replaced here and shown once, with **Copy**), the name, and the icon (**Change** opens the choice).
 - **History** — payments of all agents; filters by payee or INN, agent and period, and by status. A payment opens as its passport; an unconfirmed one can be checked with the bank.
 - **Settings** — language and theme.
 

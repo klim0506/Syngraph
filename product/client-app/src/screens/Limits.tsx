@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Agent, AgentChange, changeAgent, Period, Weekday, WEEKDAYS } from "../api";
+import { Agent, AgentChange, changeAgent, Period, rub, Weekday, WEEKDAYS } from "../api";
 import { serverText, useT } from "../i18n";
 
 const PERIODS: Period[] = ["payment", "day", "week", "month"];
@@ -89,21 +89,33 @@ export default function Limits({ agent, onAgent }: Props) {
   return (
     <form onSubmit={save}>
       <section className="card">
-        {PERIODS.map((period) => (
-          <label className="field" key={period}>
-            <span className="field-label">{t.limit[period]}</span>
-            <span className="money-input">
-              <input
-                inputMode="decimal"
-                dir="ltr"
-                value={draft.limits[period]}
-                onChange={(e) => edit({ ...draft, limits: { ...draft.limits, [period]: e.target.value } })}
-                aria-label={t.inRubles(t.limit[period])}
-              />
-              <span aria-hidden>₽</span>
-            </span>
-          </label>
-        ))}
+        {PERIODS.map((period) => {
+          const spent = period === "payment" ? null : agent.spent[period];
+          const share = spent === null ? 0 : Math.min(spent / agent.limits[period], 1);
+          return (
+            <label className="field" key={period}>
+              <span className="field-label">
+                {t.limit[period]}
+                {spent !== null && <small className="mono">{t.spentNow(rub(spent))}</small>}
+              </span>
+              <span className="money-input">
+                <input
+                  inputMode="decimal"
+                  dir="ltr"
+                  value={draft.limits[period]}
+                  onChange={(e) => edit({ ...draft, limits: { ...draft.limits, [period]: e.target.value } })}
+                  aria-label={t.inRubles(t.limit[period])}
+                />
+                <span aria-hidden>₽</span>
+              </span>
+              {spent !== null && (
+                <span className="field-meter" role="meter" aria-valuenow={spent} aria-valuemax={agent.limits[period]} aria-label={t.limit[period]}>
+                  <span className={share >= 0.9 ? "meter-high" : undefined} style={{ width: `${share * 100}%` }} />
+                </span>
+              )}
+            </label>
+          );
+        })}
       </section>
 
       <h2>{t.workingHours}</h2>

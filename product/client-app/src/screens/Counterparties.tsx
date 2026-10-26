@@ -112,7 +112,7 @@ export default function Counterparties({ agent, onAgent }: Props) {
 
   return (
     <>
-      <div className="segmented" role="group" aria-label={t.payees}>
+      <div className="segmented segmented-flush" role="group" aria-label={t.payees}>
         <button type="button" aria-pressed={agent.any_counterparty} onClick={() => act(async () => onAgent(await changeAgent(agent.id, { any_counterparty: true })))}>
           {t.anyone}
         </button>
@@ -121,93 +121,97 @@ export default function Counterparties({ agent, onAgent }: Props) {
         </button>
       </div>
 
-      <form className="card add-form" onSubmit={submit}>
-        <div className="combo">
-          <label className="field-label" htmlFor="payee-query">
-            {t.innOrName}
+      {!agent.any_counterparty && ( // with "Anyone" the list is not checked, so it is not shown
+        <>
+        <form className="card add-form" onSubmit={submit}>
+          <div className="combo">
+            <label className="field-label" htmlFor="payee-query">
+              {t.innOrName}
+            </label>
+            <input
+              id="payee-query"
+              value={query}
+              onChange={(e) => type(e.target.value)}
+              onFocus={() => setOpen(true)}
+              onBlur={() => setOpen(false)}
+              onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+              placeholder={t.innExample}
+              role="combobox"
+              aria-expanded={open && suggestions.length > 0}
+              autoComplete="off"
+              inputMode="search"
+            />
+            {open && suggestions.length > 0 && (
+              <ul className="drop" role="listbox">
+                {suggestions.map((c) => (
+                  <li
+                    key={c.inn}
+                    role="option"
+                    aria-disabled={c.allowed}
+                    aria-selected={false}
+                    className={c.allowed ? "off" : undefined}
+                    onMouseDown={(e) => {
+                      e.preventDefault(); // keep the focus, or blur closes the list before the click
+                      if (!c.allowed) pick(c);
+                    }}
+                  >
+                    <span>{c.name}</span>
+                    <small>{c.allowed ? t.inList : c.inn}</small>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <label className="field-label" htmlFor="payee-name">
+            {nameLabel}
           </label>
           <input
-            id="payee-query"
-            value={query}
-            onChange={(e) => type(e.target.value)}
-            onFocus={() => setOpen(true)}
-            onBlur={() => setOpen(false)}
-            onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
-            placeholder={t.innExample}
-            role="combobox"
-            aria-expanded={open && suggestions.length > 0}
-            autoComplete="off"
-            inputMode="search"
+            id="payee-name"
+            value={found?.name ?? name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={lookup !== "new"}
+            placeholder={lookup === "new" ? t.namePlaceholderNew : t.namePlaceholderAuto}
+            maxLength={160}
           />
-          {open && suggestions.length > 0 && (
-            <ul className="drop" role="listbox">
-              {suggestions.map((c) => (
-                <li
-                  key={c.inn}
-                  role="option"
-                  aria-disabled={c.allowed}
-                  aria-selected={false}
-                  className={c.allowed ? "off" : undefined}
-                  onMouseDown={(e) => {
-                    e.preventDefault(); // keep the focus, or blur closes the list before the click
-                    if (!c.allowed) pick(c);
-                  }}
-                >
-                  <span>{c.name}</span>
-                  <small>{c.allowed ? t.inList : c.inn}</small>
+          <button className="btn-primary" type="submit" disabled={!canAdd}>
+            {t.addPayee}
+          </button>
+          {(error || (alreadyListed && lookup === "found")) && (
+            <div className="error" role="alert">
+              {error ? serverText(t, error) : t.alreadyListed}
+            </div>
+          )}
+        </form>
+
+        <section className="card list">
+          {counterparties === null ? (
+            <div className="empty">{t.loading}</div>
+          ) : allowed.length === 0 ? (
+            <div className="empty">{t.listEmpty}</div>
+          ) : (
+            <ul>
+              {allowed.map((c) => (
+                <li key={c.inn}>
+                  <span>
+                    <span className="op-payee">{c.name}</span>
+                    <span className="muted mono">{c.inn}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="remove"
+                    onClick={() => act(async () => { await removeCounterparty(agent.id, c.inn); await reload(); })}
+                    aria-label={t.removeName(c.name)}
+                    title={t.remove}
+                  >
+                    ✕
+                  </button>
                 </li>
               ))}
             </ul>
           )}
-        </div>
-        <label className="field-label" htmlFor="payee-name">
-          {nameLabel}
-        </label>
-        <input
-          id="payee-name"
-          value={found?.name ?? name}
-          onChange={(e) => setName(e.target.value)}
-          disabled={lookup !== "new"}
-          placeholder={lookup === "new" ? t.namePlaceholderNew : t.namePlaceholderAuto}
-          maxLength={160}
-        />
-        <button className="btn-primary" type="submit" disabled={!canAdd}>
-          {t.addPayee}
-        </button>
-        {(error || (alreadyListed && lookup === "found")) && (
-          <div className="error" role="alert">
-            {error ? serverText(t, error) : t.alreadyListed}
-          </div>
-        )}
-      </form>
-
-      <section className={`card list ${agent.any_counterparty ? "inactive" : ""}`}>
-        {counterparties === null ? (
-          <div className="empty">{t.loading}</div>
-        ) : allowed.length === 0 ? (
-          <div className="empty">{t.listEmpty}</div>
-        ) : (
-          <ul>
-            {allowed.map((c) => (
-              <li key={c.inn}>
-                <span>
-                  <span className="op-payee">{c.name}</span>
-                  <span className="muted mono">{c.inn}</span>
-                </span>
-                <button
-                  type="button"
-                  className="remove"
-                  onClick={() => act(async () => { await removeCounterparty(agent.id, c.inn); await reload(); })}
-                  aria-label={t.removeName(c.name)}
-                  title={t.remove}
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        </section>
+        </>
+      )}
     </>
   );
 }

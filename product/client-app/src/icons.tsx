@@ -19,12 +19,12 @@ export const ICONS = Object.keys(GLYPHS) as AgentIcon[];
 export function AgentBadge({ icon, size = 36 }: { icon: AgentIcon; size?: number }) {
   return (
     <span className="badge" style={{ width: size, height: size }} aria-hidden>
-      <AgentGlyph icon={icon} size={Math.round(size * 0.55)} />
+      <AgentGlyph icon={icon} size={Math.round(size * 0.5)} />
     </span>
   );
 }
 
 export function AgentGlyph({ icon, size = 20 }: { icon: AgentIcon; size?: number }) {
   const Glyph = GLYPHS[icon] ?? FileText;
-  return <Glyph size={size} strokeWidth={1.75} aria-hidden />;
+  return <Glyph size={size} strokeWidth={1.75} style={{ display: "block" }} aria-hidden />;
 }

@@ -62,15 +62,13 @@ export default function Agents({ agents, onOpen, onCreated }: Props) {
           const state = stateOf(a);
           return (
             <li key={a.id}>
-              <button type="button" onClick={() => onOpen(a.id)}>
-                <span className="agent-head">
-                  <AgentBadge icon={a.icon} />
-                  <span>
-                    <span className="agent-title">{a.name}</span>
-                    <span className="muted mono">{t.spentToday(rub(a.spent.day), rub(a.limits.day))}</span>
-                  </span>
+              <button type="button" className="agent-head" onClick={() => onOpen(a.id)}>
+                <AgentBadge icon={a.icon} size={44} />
+                <span>
+                  <span className="agent-title">{a.name}</span>
+                  <span className="muted mono">{t.spentToday(rub(a.spent.day), rub(a.limits.day))}</span>
+                  <span className={`dot-state ${a.has_key ? `state-${state}` : ""}`}>{a.has_key ? t.state[state] : t.noKey}</span>
                 </span>
-                <span className={`dot-state ${a.has_key ? `state-${state}` : ""}`}>{a.has_key ? t.state[state] : t.noKey}</span>
               </button>
             </li>
           );

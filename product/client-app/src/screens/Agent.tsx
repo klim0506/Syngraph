@@ -1,15 +1,14 @@
 import { useState } from "react";
-import { Agent, changeAgent, Operation, rub } from "../api";
+import { Agent, changeAgent, Operation } from "../api";
 import { serverText, useT } from "../i18n";
 import { AgentBadge } from "../icons";
 import AgentSettings from "./AgentSettings";
 import Counterparties from "./Counterparties";
+import History from "./History";
 import Limits from "./Limits";
-import OperationRow from "./OperationRow";
 
-type Section = "overview" | "limits" | "payees" | "settings";
-const SECTIONS: Section[] = ["overview", "limits", "payees", "settings"];
-const RECENT = 4;
+type Section = "limits" | "history" | "settings";
+const SECTIONS: Section[] = ["limits", "history", "settings"];
 
 export type AgentState = "paused" | "active" | "offHours";
 export const stateOf = (a: Agent): AgentState => (a.paused ? "paused" : a.working_now ? "active" : "offHours");
@@ -25,7 +24,7 @@ type Props = {
 export default function AgentScreen({ agent, operations, onAgent, onBack, onChanged }: Props) {
   const t = useT();
   // an agent without a key opens on its settings, where the key is created
-  const [section, setSection] = useState<Section>(agent.has_key ? "overview" : "settings");
+  const [section, setSection] = useState<Section>(agent.has_key ? "limits" : "settings");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const state = stateOf(agent);
@@ -75,44 +74,14 @@ export default function AgentScreen({ agent, operations, onAgent, onBack, onChan
         ))}
       </div>
 
-      {section === "overview" && (
+      {section === "history" && <History agents={[agent]} operations={operations} onChanged={onChanged} agent={agent} />}
+      {section === "limits" && (
         <>
-          <section className="card">
-            {[
-              { label: t.today, spent: agent.spent.day, limit: agent.limits.day },
-              { label: t.thisWeek, spent: agent.spent.week, limit: agent.limits.week },
-              { label: t.thisMonth, spent: agent.spent.month, limit: agent.limits.month },
-            ].map((b) => {
-              const share = Math.min(b.spent / b.limit, 1);
-              return (
-                <div className="meter" key={b.label}>
-                  <div className="meter-text">
-                    <span>{b.label}</span>
-                    <span>
-                      <b>{rub(b.spent)}</b> <span className="muted">/ {rub(b.limit)}</span>
-                    </span>
-                  </div>
-                  <div className="meter-track" role="meter" aria-valuenow={b.spent} aria-valuemax={b.limit} aria-label={b.label}>
-                    <div className={`meter-fill ${share >= 0.9 ? "meter-high" : ""}`} style={{ width: `${share * 100}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </section>
-
-          {operations.length === 0 ? (
-            <div className="empty">{t.noPayments}</div>
-          ) : (
-            <ul className="ops card">
-              {operations.slice(0, RECENT).map((o) => (
-                <OperationRow key={o.id} operation={o} onChanged={onChanged} />
-              ))}
-            </ul>
-          )}
+          <Limits agent={agent} onAgent={onAgent} />
+          <h2>{t.payees}</h2>
+          <Counterparties agent={agent} onAgent={onAgent} />
         </>
       )}
-      {section === "limits" && <Limits agent={agent} onAgent={onAgent} />}
-      {section === "payees" && <Counterparties agent={agent} onAgent={onAgent} />}
       {section === "settings" && <AgentSettings agent={agent} onAgent={onAgent} onChanged={onChanged} />}
     </>
   );

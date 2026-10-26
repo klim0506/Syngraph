@@ -1,26 +1,25 @@
-import { FormEvent, useState } from "react";
-import { Agent, AgentChange, AgentIcon, changeAgent } from "../api";
+import { useState } from "react";
+import { Agent, AgentChange, changeAgent, newAgentKey } from "../api";
 import { serverText, useT } from "../i18n";
 import { AgentGlyph, ICONS } from "../icons";
-import AgentKey from "./AgentKey";
 
 type Props = { agent: Agent; onAgent: (a: Agent) => void; onChanged: () => void };
 
-/** The agent's own settings: key, name and icon. */
+/** The agent's settings in one card: key, name, icon. */
 export default function AgentSettings({ agent, onAgent, onChanged }: Props) {
   const t = useT();
   const [name, setName] = useState(agent.name);
+  const [key, setKey] = useState<string | null>(null); // a fresh key, shown until the person closes it
+  const [copied, setCopied] = useState(false);
+  const [picking, setPicking] = useState(false); // the icon choice is open
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [error, setError] = useState(""); // the core's message; translated when shown
 
-  async function save(change: AgentChange) {
+  async function run(action: () => Promise<void>) {
     setBusy(true);
     setError("");
-    setSaved(false);
     try {
-      onAgent(await changeAgent(agent.id, change));
-      setSaved(true);
+      await action();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -28,48 +27,102 @@ export default function AgentSettings({ agent, onAgent, onChanged }: Props) {
     }
   }
 
-  function rename(e: FormEvent) {
-    e.preventDefault();
-    save({ name: name.trim() });
+  const save = (change: AgentChange) => run(async () => onAgent(await changeAgent(agent.id, change)));
+
+  function rename() {
+    const trimmed = name.trim();
+    if (!trimmed) setName(agent.name);
+    else if (trimmed !== agent.name) save({ name: trimmed });
+  }
+
+  const createKey = () =>
+    run(async () => {
+      setKey((await newAgentKey(agent.id)).key);
+      setCopied(false);
+      onChanged();
+    });
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(key ?? "");
+      setCopied(true);
+    } catch {
+      // no clipboard access: the key stays on screen to copy by hand
+    }
   }
 
   return (
-    <>
-      <AgentKey agent={agent} onChanged={onChanged} />
-
-      <form className="card new-agent" onSubmit={rename}>
-        <label className="field-label" htmlFor="agent-name">
-          {t.agentName}
-        </label>
-        <div className="inline-form">
-          <input id="agent-name" value={name} onChange={(e) => { setName(e.target.value); setSaved(false); }} maxLength={80} />
-          <button type="submit" className="btn-secondary" disabled={busy || !name.trim() || name.trim() === agent.name}>
-            {t.rename}
-          </button>
-        </div>
-      </form>
-
-      <section className="card">
-        <div className="card-title">{t.icon}</div>
-        <div className="icons" role="radiogroup" aria-label={t.icon}>
-          {ICONS.map((icon: AgentIcon) => (
-            <button
-              key={icon}
-              type="button"
-              role="radio"
-              aria-checked={agent.icon === icon}
-              disabled={busy}
-              onClick={() => agent.icon !== icon && save({ icon })}
-            >
-              <AgentGlyph icon={icon} size={22} />
-              <span>{t.iconNames[icon]}</span>
+    <section className="card settings-card">
+      <div className="srow">
+        <span className="srow-name">{t.keyLabel}</span>
+        <span className="mono muted srow-value">{agent.key_hint ? `…${agent.key_hint}` : "—"}</span>
+        <button type="button" className={agent.has_key ? "btn-small" : "btn-small primary"} disabled={busy} onClick={createKey} title={agent.has_key ? t.replaceWarn : undefined}>
+          {agent.has_key ? t.replaceKey : t.create}
+        </button>
+      </div>
+      {key && (
+        <div className="fresh-key">
+          <div className="key-value mono" tabIndex={0} onFocus={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>
+            {key}
+          </div>
+          <p className="muted">
+            {t.keyOnce} {t.keyNote}
+          </p>
+          <div className="key-actions">
+            <button type="button" className="btn-primary" onClick={copy}>
+              {copied ? t.copied : t.copy}
             </button>
-          ))}
+            <button type="button" className="btn-secondary" onClick={() => setKey(null)}>
+              {t.done}
+            </button>
+          </div>
         </div>
-      </section>
+      )}
 
-      {saved && <div className="notice">{t.agentSaved}</div>}
+      <label className="srow">
+        <span className="srow-name">{t.agentName}</span>
+        <input
+          className="srow-input"
+          value={name}
+          maxLength={80}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={rename}
+          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), e.currentTarget.blur())}
+        />
+      </label>
+
+      <div className="srow srow-wrap">
+        <span className="srow-name">{t.icon}</span>
+        <span className="srow-value icon-current">
+          <AgentGlyph icon={agent.icon} size={20} />
+        </span>
+        <button type="button" className="btn-small" aria-expanded={picking} onClick={() => setPicking(!picking)}>
+          {picking ? t.cancel : t.change}
+        </button>
+        {picking && (
+          <div className="icon-row" role="radiogroup" aria-label={t.icon}>
+            {ICONS.map((icon) => (
+              <button
+                key={icon}
+                type="button"
+                role="radio"
+                aria-checked={agent.icon === icon}
+                aria-label={t.iconNames[icon]}
+                title={t.iconNames[icon]}
+                disabled={busy}
+                onClick={() => {
+                  setPicking(false);
+                  if (agent.icon !== icon) save({ icon });
+                }}
+              >
+                <AgentGlyph icon={icon} size={20} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {error && <div className="error">{serverText(t, error)}</div>}
-    </>
+    </section>
   );
 }
