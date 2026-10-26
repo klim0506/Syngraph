@@ -31,7 +31,6 @@ export const en = {
   keyLabel: "Key",
   agentName: "Agent name",
   icon: "Icon",
-  change: "Change",
   iconNames: { invoice: "Invoices", cart: "Purchases", plane: "Travel", truck: "Logistics", briefcase: "Business", building: "Office", card: "Cards", bank: "Finance" } satisfies Record<AgentIcon, string>,
 
   pause: "Pause",
@@ -67,7 +66,7 @@ export const en = {
   removeName: (name: string) => `Remove ${name}`,
 
   keyNote: "The agent connects to Syngraph with this key: SYNGRAPH_AGENT_KEY in the settings of its MCP server.",
-  replaceKey: "Replace",
+  replaceKey: "Replace key",
   replaceWarn: "The current key stops working at once.",
   keyOnce: "Copy the key now: Syngraph keeps only its fingerprint and will not show it again.",
   copy: "Copy",

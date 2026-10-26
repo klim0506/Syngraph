@@ -30,7 +30,6 @@ export const ar: Dict = {
   keyLabel: "المفتاح",
   agentName: "اسم الوكيل",
   icon: "الأيقونة",
-  change: "تغيير",
   iconNames: { invoice: "الفواتير", cart: "المشتريات", plane: "السفر", truck: "الخدمات اللوجستية", briefcase: "الأعمال", building: "المكتب", card: "البطاقات", bank: "المالية" },
 
   pause: "إيقاف مؤقت",
@@ -66,7 +65,7 @@ export const ar: Dict = {
   removeName: (name) => `إزالة ${name}`,
 
   keyNote: "يتصل الوكيل بـ Syngraph بهذا المفتاح: SYNGRAPH_AGENT_KEY في إعدادات خادم MCP الخاص به.",
-  replaceKey: "استبدال",
+  replaceKey: "استبدال المفتاح",
   replaceWarn: "سيتوقف المفتاح الحالي عن العمل فورًا.",
   keyOnce: "انسخ المفتاح الآن: يحتفظ Syngraph ببصمته فقط ولن يعرضه مرة أخرى.",
   copy: "نسخ",

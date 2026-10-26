@@ -11,7 +11,7 @@ Entry points to the core: `mcp-server` (agents) and `client-app` (people).
 
 ## Agents and keys
 
-A client has several agents; each has its own mandate and its own key. The key (`sgk_...`) is created in the client app and shown once; the core stores only its SHA-256 and the last characters. A new key turns the old one off at once. The agent sends its key with every MCP call; the core finds the agent by it and checks the payment against that agent's mandate only. An agent sees only its own operations.
+A client has several agents; each has its own mandate and its own key. The key (`sgk_...`) is created in the client app and shown once; the core stores only its SHA-256 and the first and last characters ("sgk_Ab3x…9QzT"). A new key turns the old one off at once. The agent sends its key with every MCP call; the core finds the agent by it and checks the payment against that agent's mandate only. An agent sees only its own operations.
 
 ## Data
 

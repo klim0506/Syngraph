@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS agents (  -- a client's AI agent; each has its own ma
     name        TEXT    NOT NULL,         -- "Invoice agent"
     icon        TEXT    NOT NULL DEFAULT 'invoice',  -- one of AGENT_ICONS, chosen by the client
     secret_hash TEXT    UNIQUE,           -- SHA-256 of the agent's key; the key itself is never stored
-    secret_hint TEXT,                     -- last characters of the key, to tell keys apart
+    secret_hint TEXT,                     -- start and end of the key, "sgk_Ab3x…9QzT", to tell keys apart
     created_at  TEXT    NOT NULL
 );
 CREATE TABLE IF NOT EXISTS counterparties (  -- shared by all clients: one row per organisation

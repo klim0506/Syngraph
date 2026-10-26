@@ -1,3 +1,4 @@
+import { Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Agent, AgentChange, changeAgent, newAgentKey } from "../api";
 import { serverText, useT } from "../i18n";
@@ -55,9 +56,18 @@ export default function AgentSettings({ agent, onAgent, onChanged }: Props) {
     <section className="card settings-card">
       <div className="srow">
         <span className="srow-name">{t.keyLabel}</span>
-        <span className="mono muted srow-value">{agent.key_hint ? `…${agent.key_hint}` : "—"}</span>
-        <button type="button" className={agent.has_key ? "btn-small" : "btn-small primary"} disabled={busy} onClick={createKey} title={agent.has_key ? t.replaceWarn : undefined}>
-          {agent.has_key ? t.replaceKey : t.create}
+        <span className="mono muted srow-value" dir="ltr">
+          {!agent.key_hint ? "—" : agent.key_hint.includes("…") ? agent.key_hint : `…${agent.key_hint}`}
+        </span>
+        <button
+          type="button"
+          className={agent.has_key ? "btn-round" : "btn-round primary"}
+          disabled={busy}
+          onClick={createKey}
+          aria-label={agent.has_key ? t.replaceKey : t.create}
+          title={agent.has_key ? `${t.replaceKey}. ${t.replaceWarn}` : t.create}
+        >
+          {agent.has_key ? <RefreshCw size={16} strokeWidth={1.75} aria-hidden /> : <Plus size={16} strokeWidth={2} aria-hidden />}
         </button>
       </div>
       {key && (
@@ -93,11 +103,15 @@ export default function AgentSettings({ agent, onAgent, onChanged }: Props) {
 
       <div className="srow srow-wrap">
         <span className="srow-name">{t.icon}</span>
-        <span className="srow-value icon-current">
+        <button
+          type="button"
+          className="icon-current"
+          aria-expanded={picking}
+          aria-label={`${t.icon}: ${t.iconNames[agent.icon]}`}
+          title={t.iconNames[agent.icon]}
+          onClick={() => setPicking(!picking)}
+        >
           <AgentGlyph icon={agent.icon} size={20} />
-        </span>
-        <button type="button" className="btn-small" aria-expanded={picking} onClick={() => setPicking(!picking)}>
-          {picking ? t.cancel : t.change}
         </button>
         {picking && (
           <div className="icon-row" role="radiogroup" aria-label={t.icon}>

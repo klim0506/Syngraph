@@ -12,7 +12,7 @@ export type Agent = {
   name: string;
   icon: AgentIcon;
   has_key: boolean;
-  key_hint: string | null; // last characters of the current key
+  key_hint: string | null; // start and end of the current key, "sgk_Ab3x…9QzT"; older keys: the end only
   paused: boolean;
   any_counterparty: boolean;
   timezone: string;

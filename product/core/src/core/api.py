@@ -38,7 +38,7 @@ class Agent(TypedDict):
     name: str
     icon: str  # one of db.AGENT_ICONS
     has_key: bool
-    key_hint: str | None  # last characters of the current key
+    key_hint: str | None  # start and end of the current key, "sgk_Ab3x…9QzT"
     paused: bool
     any_counterparty: bool
     timezone: str

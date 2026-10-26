@@ -30,7 +30,6 @@ export const ru: Dict = {
   keyLabel: "Ключ",
   agentName: "Имя агента",
   icon: "Иконка",
-  change: "Сменить",
   iconNames: { invoice: "Счета", cart: "Закупки", plane: "Поездки", truck: "Логистика", briefcase: "Бизнес", building: "Офис", card: "Карты", bank: "Финансы" },
 
   pause: "Пауза",
@@ -66,7 +65,7 @@ export const ru: Dict = {
   removeName: (name) => `Убрать ${name}`,
 
   keyNote: "Агент подключается к Syngraph с этим ключом: SYNGRAPH_AGENT_KEY в настройках его MCP-сервера.",
-  replaceKey: "Заменить",
+  replaceKey: "Заменить ключ",
   replaceWarn: "Текущий ключ сразу перестанет работать.",
   keyOnce: "Скопируйте ключ сейчас: Syngraph хранит только его отпечаток и больше его не покажет.",
   copy: "Скопировать",
