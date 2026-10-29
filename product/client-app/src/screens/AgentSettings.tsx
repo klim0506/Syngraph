@@ -1,142 +1,133 @@
-import { Plus, RefreshCw } from "lucide-react";
-import { useState } from "react";
-import { Agent, AgentChange, changeAgent, newAgentKey } from "../api";
+import { useRef, useState } from "react";
+import { Agent, deleteAgent, newAgentKey } from "../api";
 import { serverText, useT } from "../i18n";
-import { AgentGlyph, ICONS } from "../icons";
 
-type Props = { agent: Agent; onAgent: (a: Agent) => void; onChanged: () => void };
-
-/** The agent's settings in one card: key, name, icon. */
-export default function AgentSettings({ agent, onAgent, onChanged }: Props) {
+/** The key is the first card on Control, with the existing one-time copy flow. */
+export function AgentKey({ agent, onChanged }: { agent: Agent; onChanged: () => void }) {
   const t = useT();
-  const [name, setName] = useState(agent.name);
-  const [key, setKey] = useState<string | null>(null); // a fresh key, shown until the person closes it
-  const [copied, setCopied] = useState(false);
-  const [picking, setPicking] = useState(false); // the icon choice is open
+  const [key, setKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(""); // the core's message; translated when shown
+  const [error, setError] = useState("");
+  const hint = agent.key_hint;
+  const shownHint = !hint ? "—" : hint.includes("…")
+    ? `${hint.replace(/^sgk_/, "").slice(0, 2)}…${hint.slice(-4)}`
+    : `…${hint.slice(-4)}`;
 
   async function run(action: () => Promise<void>) {
+    if (busy) return;
     setBusy(true);
     setError("");
-    try {
-      await action();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const save = (change: AgentChange) => run(async () => onAgent(await changeAgent(agent.id, change)));
-
-  function rename() {
-    const trimmed = name.trim();
-    if (!trimmed) setName(agent.name);
-    else if (trimmed !== agent.name) save({ name: trimmed });
+    try { await action(); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
   }
 
   const createKey = () =>
     run(async () => {
       setKey((await newAgentKey(agent.id)).key);
-      setCopied(false);
       onChanged();
     });
 
+  return (
+      <section className="card settings-card">
+        {key ? (
+          <div className="settings-key">
+            <span>{t.keyTitle}</span>
+            <FreshKey secret={key} next={t.done} onNext={() => setKey(null)} />
+          </div>
+        ) : (
+          <div className="srow">
+            <span className="srow-name">{t.keyLabel}</span>
+            <span className="num srow-value" dir="ltr">
+              {shownHint}
+            </span>
+            <button
+              type="button"
+              className="link"
+              disabled={busy}
+              onClick={createKey}
+              aria-label={agent.has_key ? t.replaceKey : t.create}
+              title={agent.has_key ? t.replaceWarn : undefined}
+            >
+              {agent.has_key ? t.replace : t.create}
+            </button>
+          </div>
+        )}
+
+        {error && <div className="error">{serverText(t, error)}</div>}
+      </section>
+  );
+}
+
+/** Deleting an agent stays at the end of Control and still requires confirmation. */
+export function DeleteAgent({ agent, onDeleted }: { agent: Agent; onDeleted: () => void }) {
+  const t = useT();
+  const [deleting, setDeleting] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function remove() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try { await deleteAgent(agent.id); onDeleted(); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <>
+      {deleting ? (
+        <section className="card">
+          <p>{t.deleteAsk(agent.name)}</p>
+          <p className="muted">{t.deleteNote}</p>
+          <div className="key-actions">
+            <button type="button" className="btn-secondary" disabled={busy} onClick={remove}>
+              {t.deleteAgent}
+            </button>
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => { setDeleting(false); setError(""); }}>
+              {t.cancel}
+            </button>
+          </div>
+          {error && <div className="error">{serverText(t, error)}</div>}
+        </section>
+      ) : (
+        <button type="button" className="link delete-link" onClick={() => { setDeleting(true); setError(""); }}>
+          {t.deleteAgent}
+        </button>
+      )}
+    </>
+  );
+}
+
+type KeyProps = { secret: string; next: string; onNext: () => void };
+
+/** A new key, shown once: copy it, then the same button leads on. */
+export function FreshKey({ secret, next, onNext }: KeyProps) {
+  const t = useT();
+  const [copied, setCopied] = useState<"no" | "yes" | "by hand">("no");
+  const keyBox = useRef<HTMLDivElement>(null);
+
   async function copy() {
     try {
-      await navigator.clipboard.writeText(key ?? "");
-      setCopied(true);
+      await navigator.clipboard.writeText(secret);
+      setCopied("yes");
     } catch {
-      // no clipboard access: the key stays on screen to copy by hand
+      // no clipboard access: the key is selected to copy by hand
+      if (keyBox.current) window.getSelection()?.selectAllChildren(keyBox.current);
+      setCopied("by hand");
     }
   }
 
   return (
-    <section className="card settings-card">
-      <div className="srow">
-        <span className="srow-name">{t.keyLabel}</span>
-        <span className="muted num srow-value" dir="ltr">
-          {!agent.key_hint ? "—" : agent.key_hint.includes("…") ? agent.key_hint : `…${agent.key_hint}`}
-        </span>
-        <button
-          type="button"
-          className={agent.has_key ? "btn-round" : "btn-round primary"}
-          disabled={busy}
-          onClick={createKey}
-          aria-label={agent.has_key ? t.replaceKey : t.create}
-          title={agent.has_key ? `${t.replaceKey}. ${t.replaceWarn}` : t.create}
-        >
-          {agent.has_key ? <RefreshCw size={16} strokeWidth={1.75} aria-hidden /> : <Plus size={16} strokeWidth={2} aria-hidden />}
-        </button>
+    <div className="fresh-key">
+      <div ref={keyBox} className="key-value num" dir="ltr" tabIndex={0} onFocus={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>
+        {secret}
       </div>
-      {key && (
-        <div className="fresh-key">
-          <div className="key-value num" tabIndex={0} onFocus={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}>
-            {key}
-          </div>
-          <p className="muted">
-            {t.keyOnce} {t.keyNote}
-          </p>
-          <div className="key-actions">
-            <button type="button" className="btn-primary" onClick={copy}>
-              {copied ? t.copied : t.copy}
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => setKey(null)}>
-              {t.done}
-            </button>
-          </div>
-        </div>
-      )}
-
-      <label className="srow">
-        <span className="srow-name">{t.agentName}</span>
-        <input
-          className="srow-input"
-          value={name}
-          maxLength={80}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={rename}
-          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), e.currentTarget.blur())}
-        />
-      </label>
-
-      <div className="srow srow-wrap">
-        <span className="srow-name">{t.icon}</span>
-        <button
-          type="button"
-          className="icon-current"
-          aria-expanded={picking}
-          aria-label={`${t.icon}: ${t.iconNames[agent.icon]}`}
-          title={t.iconNames[agent.icon]}
-          onClick={() => setPicking(!picking)}
-        >
-          <AgentGlyph icon={agent.icon} size={20} />
-        </button>
-        {picking && (
-          <div className="icon-row" role="radiogroup" aria-label={t.icon}>
-            {ICONS.map((icon) => (
-              <button
-                key={icon}
-                type="button"
-                role="radio"
-                aria-checked={agent.icon === icon}
-                aria-label={t.iconNames[icon]}
-                title={t.iconNames[icon]}
-                disabled={busy}
-                onClick={() => {
-                  setPicking(false);
-                  if (agent.icon !== icon) save({ icon });
-                }}
-              >
-                <AgentGlyph icon={icon} size={20} />
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {error && <div className="error">{serverText(t, error)}</div>}
-    </section>
+      {copied === "yes" ? <div className="notice">{t.copied}</div> : <p className="muted">{t.keyOnce}</p>}
+      <button type="button" className="btn-primary" onClick={copied === "no" ? copy : onNext}>
+        {copied === "no" ? t.copy : next}
+      </button>
+    </div>
   );
 }

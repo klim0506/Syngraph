@@ -1,75 +1,75 @@
 import { Plus } from "lucide-react";
-import { FormEvent, useState } from "react";
-import { addAgent, Agent, rub } from "../api";
-import { serverText, useT } from "../i18n";
-import { AgentBadge } from "../icons";
-import { stateOf } from "./Agent";
+import { Agent, Operation, rub } from "../api";
+import { Dict, useT } from "../i18n";
+import { AgentBadge, EmptyIllustration } from "../icons";
 
 type Props = {
   agents: Agent[];
+  operations: Operation[];
   onOpen: (id: number) => void;
-  onCreated: (agent: Agent) => void;
+  onNew: () => void;
 };
 
-/** The client's agents: each opens its own settings. */
-export default function Agents({ agents, onOpen, onCreated }: Props) {
-  const t = useT();
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+/** How long ago, short: "38 min", "2 d"; past 30 days, just "30+ d". */
+function ago(iso: string, t: Dict): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if (minutes < 1) return t.ago.now;
+  if (minutes < 60) return t.ago.m(minutes);
+  if (minutes < 60 * 24) return t.ago.h(Math.floor(minutes / 60));
+  const days = Math.floor(minutes / (60 * 24));
+  return days > 30 ? t.ago.long : t.ago.d(days);
+}
 
-  async function create(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      onCreated(await addAgent(name.trim()));
-      setName("");
-      setAdding(false);
-    } catch (err) {
-      setError(serverText(t, (err as Error).message));
-    } finally {
-      setBusy(false);
-    }
-  }
+/** The client's agents: each opens its own settings. */
+export default function Agents({ agents, operations, onOpen, onNew }: Props) {
+  const t = useT();
 
   return (
     <>
       <div className="title-row">
         <h1>{t.tabs.agents}</h1>
-        <button type="button" className="btn-plus" aria-label={t.newAgent} title={t.newAgent} aria-expanded={adding} onClick={() => setAdding(!adding)}>
-          <Plus size={18} strokeWidth={2} aria-hidden />
-        </button>
+        {agents.length > 0 && (
+          <button type="button" className="btn-plus" aria-label={t.newAgent} title={t.newAgent} onClick={onNew}>
+            <Plus size={18} strokeWidth={2} aria-hidden />
+          </button>
+        )}
       </div>
 
-      {adding && (
-        <form className="card new-agent" onSubmit={create}>
-          <input id="new-agent" aria-label={t.newAgent} autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t.newAgentPlaceholder} maxLength={80} />
-          <div className="key-actions">
-            <button type="submit" className="btn-primary" disabled={busy || !name.trim()}>
-              {t.create}
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => { setAdding(false); setName(""); setError(""); }}>
-              {t.cancel}
-            </button>
-          </div>
-          {error && <div className="error">{error}</div>}
-        </form>
+      {agents.length === 0 && (
+        <div className="agents-empty">
+          <EmptyIllustration kind="agents" />
+          <p className="muted">{t.noAgents}</p>
+          <button type="button" className="btn-primary" onClick={onNew}>
+            {t.connectAgent}
+          </button>
+        </div>
       )}
 
       <ul className="agents">
         {agents.map((a) => {
-          const state = stateOf(a);
+          const own = operations.filter((o) => o.agent_id === a.id); // newest first
+          const awaiting = own.filter((o) => o.status === "awaiting").length;
+          const limit = a.any_amount ? null : a.limits.day;
+          const share = limit === null ? 0 : Math.min(a.spent.day / limit, 1);
+          const status = a.paused ? t.stopped : t.payments;
           return (
             <li key={a.id}>
-              <button type="button" className="agent-head" onClick={() => onOpen(a.id)}>
-                <AgentBadge icon={a.icon} size={44} />
-                <span>
+              <button type="button" className="agent-card" onClick={() => onOpen(a.id)}>
+                <AgentBadge icon={a.icon} size={40} />
+                <span className="agent-card-body">
                   <span className="agent-title">{a.name}</span>
-                  <span className="muted num">{t.spentToday(rub(a.spent.day), rub(a.limits.day))}</span>
-                  <span className={`dot-state ${a.has_key ? `state-${state}` : ""}`}>{a.has_key ? t.state[state] : t.noKey}</span>
+                  {limit !== null && (
+                    <span className="field-meter" role="meter" aria-valuenow={a.spent.day} aria-valuemax={limit} aria-label={t.limit.day}>
+                      <span className={share >= 0.9 ? "meter-high" : undefined} style={{ width: `${share * 100}%` }} />
+                    </span>
+                  )}
+                  <span className="agent-card-line muted num">
+                    <span>{limit === null ? t.spentToday(rub(a.spent.day), null) : t.spentToday(rub(a.spent.day).replace(" ₽", ""), rub(limit))}</span>
+                    {own[0] && <span title={t.lastPayment}>{ago(own[0].created_at, t)}</span>}
+                  </span>
+                  {awaiting > 0 && <span className="dot-state state-awaiting">{t.awaitingCount(awaiting)}</span>}
                 </span>
+                <span className={`agent-dot ${a.paused ? "off" : "on"}`} role="img" aria-label={status} title={status} />
               </button>
             </li>
           );

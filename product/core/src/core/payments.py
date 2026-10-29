@@ -1,5 +1,5 @@
 """Paying an invoice: find the agent by its key -> check its mandate -> record the transaction
--> send to the bank -> update its status."""
+-> send to the bank -> update its status. A payment outside the rules waits for the client's decision."""
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -16,19 +16,21 @@ UNCONFIRMED = (
     "the bank did not confirm the payment: it may have gone through, do not pay again, check the operation status"
 )
 NOT_RECEIVED = "the bank has no such payment: it was not made"
+DECLINED = "declined by the client"
 
 
 class PaymentResult(TypedDict):
     id: str  # Syngraph operation id
     status: db.Status
     payee: str  # the name sent to the bank
-    reason: NotRequired[str]  # why rejected or unknown
+    reason: NotRequired[str]  # why rejected, unknown or awaiting the client
 
 
-def pay(agent_key: str, payee: str, payee_inn: str, amount: str) -> PaymentResult:
+def pay(agent_key: str, payee: str, payee_inn: str, amount: str, category: str) -> PaymentResult:
     kopecks = to_kopecks(amount)
     payee = check_payee(payee)
     check_inn(payee_inn)
+    check_category(category)
     conn = db.connect()
     try:
         db.create_tables_and_demo_client(conn)
@@ -48,31 +50,61 @@ def pay(agent_key: str, payee: str, payee_inn: str, amount: str) -> PaymentResul
             "bank_id": None,
             "amount_kopecks": kopecks,
             "currency": CURRENCY,
+            "category": category,
             "status": "pending",
             "reason": None,
             "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        transaction["reason"] = rules.check(conn, mandate, counterparty["id"], payee_inn, kopecks, now)
-        if transaction["reason"]:
-            transaction["status"] = "rejected"
+        verdict, transaction["reason"] = rules.check(conn, mandate, counterparty["id"], payee_inn, category, kopecks, now)
+        transaction["status"] = {"pass": "pending", "ask": "awaiting", "reject": "rejected"}[verdict]
         db.insert_transaction(conn, transaction)
         conn.commit()  # saved before the bank is called, so a lost answer leaves a trace
 
         if transaction["status"] == "pending":
-            try:
-                reply = bank.send_payment(
-                    transaction["id"], transaction["payee"], transaction["payee_inn"], kopecks, CURRENCY
-                )
-                transaction["bank_id"] = reply["id"]
-                transaction["status"] = reply["status"]
-            except BankUnconfirmed:
-                transaction["status"] = "unknown"
-                transaction["reason"] = UNCONFIRMED
-            db.update_transaction_status(conn, transaction)
-            conn.commit()
+            send(conn, transaction, mandate["client_id"])
     finally:
         conn.close()
     return to_result(transaction)
+
+
+def decide(client_id: int, operation_id: str, approve: bool) -> db.Transaction:
+    """The client's decision on an awaiting payment: approved goes to the bank as is, declined is rejected."""
+    conn = db.connect()
+    try:
+        db.create_tables_and_demo_client(conn)
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")  # one decision per payment, even with two taps
+        row = db.find_transaction(conn, client_id, operation_id)
+        if row is None:
+            raise InvalidRequest(f"operation {operation_id!r} not found for client {client_id}")
+        if row["status"] != "awaiting":
+            raise InvalidRequest(f"operation {operation_id} is not awaiting approval, it is {row['status']}")
+        transaction = cast(db.Transaction, {k: row[k] for k in db.Transaction.__annotations__})
+        transaction["status"], transaction["reason"] = ("pending", None) if approve else ("rejected", DECLINED)
+        db.update_transaction_status(conn, transaction)
+        conn.commit()  # recorded before the bank is called, as in pay()
+        if approve:
+            send(conn, transaction, client_id)
+        return transaction
+    finally:
+        conn.close()
+
+
+def send(conn: sqlite3.Connection, transaction: db.Transaction, client_id: int) -> None:
+    """Sends a recorded pending payment to the bank and saves the answer."""
+    try:
+        reply = bank.send_payment(
+            transaction["id"], client_id, transaction["payee"], transaction["payee_inn"],
+            transaction["amount_kopecks"], transaction["currency"],
+        )
+        transaction["bank_id"] = reply["id"]
+        transaction["status"] = reply["status"]
+        transaction["reason"] = reply.get("reason")
+    except BankUnconfirmed:
+        transaction["status"] = "unknown"
+        transaction["reason"] = UNCONFIRMED
+    db.update_transaction_status(conn, transaction)
+    conn.commit()
 
 
 def get_status(agent_key: str, operation_id: str) -> PaymentResult:
@@ -116,7 +148,8 @@ def ask_bank_again(transaction: db.Transaction) -> bool:
     if reply is None:
         transaction["status"], transaction["reason"] = "rejected", NOT_RECEIVED
     else:
-        transaction["bank_id"], transaction["status"], transaction["reason"] = reply["id"], reply["status"], None
+        transaction["bank_id"], transaction["status"] = reply["id"], reply["status"]
+        transaction["reason"] = reply.get("reason")
     return True
 
 
@@ -136,6 +169,11 @@ def check_payee(payee: str) -> str:
     if not payee or len(payee) > MAX_PAYEE:
         raise InvalidRequest(f"payee name must be 1 to {MAX_PAYEE} characters, got {payee!r}")
     return payee
+
+
+def check_category(category: str) -> None:
+    if category not in db.CATEGORIES:
+        raise InvalidRequest(f"category must be one of {db.CATEGORIES}, got {category!r}")
 
 
 def check_inn(inn: str) -> None:

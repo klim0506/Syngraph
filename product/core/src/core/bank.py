@@ -4,7 +4,7 @@ Every order carries the Syngraph operation id: the bank does not pay the same id
 and answers its status by that id, so a lost answer can be asked again.
 """
 import os
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 import httpx
 
@@ -15,13 +15,17 @@ BANK_URL = os.environ.get("BANK_URL", "http://127.0.0.1:8001")
 
 class BankReply(TypedDict):
     id: str
-    status: Literal["paid"]
+    status: Literal["paid", "rejected"]
+    reason: NotRequired[str]  # why the bank rejected it
 
 
-def send_payment(operation_id: str, payee: str, payee_inn: str, kopecks: int, currency: str) -> BankReply:
-    """Sends a payment order. Raises BankUnconfirmed if the bank does not confirm it."""
+def send_payment(
+    operation_id: str, account: int, payee: str, payee_inn: str, kopecks: int, currency: str
+) -> BankReply:
+    """Sends a payment order from the client's account. Raises BankUnconfirmed if the bank does not answer clearly."""
     order = {
         "operation_id": operation_id,
+        "account": account,
         "payee": payee,
         "payee_inn": payee_inn,
         "amount_kopecks": kopecks,
@@ -53,6 +57,11 @@ def read_reply(response: httpx.Response) -> BankReply:
     bank_id, status = reply["id"], reply["status"]
     if not isinstance(bank_id, str) or not bank_id.strip():
         raise ValueError("bank payment id must be a non-empty string")
-    if status != "paid":
-        raise ValueError(f"unexpected bank status {status!r}")
-    return {"id": bank_id, "status": status}
+    if status == "paid":
+        return {"id": bank_id, "status": status}
+    if status == "rejected":
+        reason = reply["reason"]
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("a rejected bank payment must have a reason")
+        return {"id": bank_id, "status": status, "reason": reason}
+    raise ValueError(f"unexpected bank status {status!r}")

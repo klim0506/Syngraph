@@ -5,6 +5,6 @@
   "allowed_counterparties": "any",
   "max_payment_kopecks": 10000000,
   "max_day_kopecks": 50000000,
-  "max_week_kopecks": 150000000,
-  "max_month_kopecks": 300000000
+  "max_week_kopecks": null,
+  "max_month_kopecks": null
 }

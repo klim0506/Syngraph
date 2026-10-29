@@ -1,6 +1,6 @@
 // Languages of the app. To add one: copy en.ts, translate it, and list it in LANGUAGES below.
 import { createContext, useContext } from "react";
-import { ltr, rub, Weekday } from "../api";
+import { Category, ltr, rub, Weekday } from "../api";
 import { ar } from "./ar";
 import { en, type Dict } from "./en";
 import { fr } from "./fr";
@@ -44,6 +44,13 @@ export function serverText(t: Dict, text: string): string {
   const s = t.server;
   const rules: [RegExp, (...m: string[]) => string][] = [
     [/^the client has paused the agent$/, () => s.paused],
+    [/^category (\w+) is forbidden by the mandate$/, (c) => s.categoryForbidden(t.categoryNames[c as Category] ?? c)],
+    [/^category (\w+) is not allowed by the mandate$/, (c) => s.categoryNotAllowed(t.categoryNames[c as Category] ?? c)],
+    [/^the client approves every payment$/, () => s.approvesEvery],
+    [/^declined by the client$/, () => s.declined],
+    [/^the agent was deleted$/, () => s.agentDeleted],
+    [/is not awaiting approval/, () => s.notAwaiting],
+    [/^category must be one of/, () => s.badCategory],
     [
       /^outside working hours: (.+) (\d\d:\d\d)-(\d\d:\d\d) (\S+)$/,
       (days, from, to, zone) =>
@@ -57,6 +64,8 @@ export function serverText(t: Dict, text: string): string {
     ],
     [/^the bank did not confirm the payment/, () => s.unconfirmed],
     [/^the bank has no such payment/, () => s.notReceived],
+    [/^insufficient funds$/, () => s.noFunds],
+    [/^no such account$/, () => s.noAccount],
     [/^limits must grow/, () => s.limitsGrow],
     [/^working hours must start before/, () => s.hoursOrder],
     [/^amount must /, () => s.badAmount],

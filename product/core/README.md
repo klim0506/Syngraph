@@ -2,7 +2,8 @@
 
 The Syngraph core.
 
-- Agents and their mandates: limits, working hours, payees, pause; later categories and when human validation is required.
+- Agents and their mandates: limits, working hours, payees, spending categories, pause, and when a person approves a payment.
+- Approval: in `auto` mode a payment that breaks a rule (limits, hours, payee, a category not allowed) is not rejected but waits for the client's decision; in `manual` mode every payment does. A paused agent and a forbidden category are rejected at once. The agent names the category itself from a fixed list (`db.CATEGORIES`).
 - Operation journal: a record is created before the bank is called, after that only its status changes; the result is a payment passport.
 - Bank adapter for the sandbox's HTTP API. Real bank adapters and notifications to agents (webhooks) are planned.
 
@@ -17,13 +18,13 @@ A client has several agents; each has its own mandate and its own key. The key (
 SQLite, `data/syngraph.db` (not in git):
 
 - `clients`;
-- `agents` — name, icon, key hash and hint, one mandate each;
-- `mandates` — the agent's rules: working days and hours, "any payee / only listed", limits per payment, day, week and month, pause;
+- `agents` — name, icon, key hash and hint, one mandate each; a deleted agent stays for the history;
+- `mandates` — the agent's rules: working days and hours or any time (`any_time`), "any payee / only listed", limits per payment, day, week and month or none (`any_amount`; the stored limits are kept), pause, approval mode (`auto` / `manual`), categories: any / only the allowed / all but the blocked;
 - `counterparties` — organisations shared by all clients, one row per INN; the INN is the key and the stored name is the one sent to the bank; an unknown INN is added with the name from the request;
 - `mandate_counterparties` — whom an agent may pay;
-- `transactions` — every payment with the payee details as sent to the bank, its status (`pending`, `paid`, `rejected`, `unknown` — the bank did not confirm, the payment may have gone through) and the reason.
+- `transactions` — every payment with the payee details as sent to the bank, its category, status (`awaiting` — the client decides, `pending`, `paid`, `rejected`, `unknown` — the bank did not confirm, the payment may have gone through) and the reason.
 
-Limits count `paid`, `pending` and `unknown` payments. Every bank order carries the operation id: the bank does not pay one id twice, and an `unknown` payment is asked again from the bank — `paid` if it was made, `rejected` if the bank never received it. An empty database gets a demo client (id 1) with one agent whose mandate comes from `rules.example.json`; an older database gets new tables and columns on open.
+Limits count `paid`, `pending` and `unknown` payments; `awaiting` ones count once approved. An approved payment goes to the bank without checking the rules again; deleting an agent rejects its awaiting payments. Every bank order carries the operation id and the client's account (its id); the bank may reject it, e.g. for insufficient funds, and the payment becomes `rejected` with the bank's reason. The bank does not pay one id twice, and an `unknown` payment is asked again from the bank — `paid` if it was made, `rejected` if the bank never received it. An empty database gets a demo client (id 1) with one agent whose mandate comes from `rules.example.json`; an older database gets new tables and columns on open.
 
 Checking the mandate and reserving the payment amount happen in one SQLite write transaction. The bank call starts after that transaction commits. If the process stops before saving the bank's response, an operation can remain `pending`; automatic recovery of that state is not implemented, and it continues to count toward limits.
 
@@ -31,11 +32,15 @@ Checking the mandate and reserving the payment amount happen in one SQLite write
 
 `api.py` (FastAPI), run with `python -m uvicorn core.api:app --port 8000`, all under `/api/clients/{id}`:
 
-- `GET`, `POST /agents` — the agents with their rules and spending; a new agent;
-- `GET`, `PATCH /agents/{agent}` — name, icon, pause, "any / only listed", working days and local times in `HH:MM` format, limits in rubles that must grow per payment <= day <= week <= month;
+- `GET`, `POST /agents` — the agents with their rules and spending; a new agent, with any of the `PATCH` settings at once;
+- `GET`, `PATCH /agents/{agent}` — name, icon, pause, "any / only listed", `any_time` or working days and local times in `HH:MM` format, `any_amount` or limits in rubles that must grow per payment <= day <= week <= month (an empty string clears a day, week or month limit: `null` means no limit for the period), approval mode, category mode and both category lists; `POST` also takes `payees` (INN and name) for an agent that pays only listed payees;
+- `GET /agents/{agent}/statistics?period=day|week|month` — confirmed spending for today, the last seven or thirty calendar days: totals, categories and the three largest payments; omit `period` for all-time summaries;
+- `DELETE /agents/{agent}` — deletes the agent: its key stops working at once, its payments stay in the history;
 - `POST /agents/{agent}/key` — a new key, returned only here;
 - `GET`, `POST /agents/{agent}/counterparties`, `DELETE .../{inn}` — the agent's payees; `GET /api/counterparties/{inn}` looks up the shared directory by exact INN only;
-- `GET /operations?agent_id=` — payments of all agents or of one; `POST /operations/{op}/check` asks the bank again.
+- `GET /operations?agent_id=` — payments of all agents or of one; `POST /operations/{op}/check` asks the bank again; `POST /operations/{op}/approve` and `.../decline` decide an `awaiting` payment.
+
+Agent statistics read the entire paid history, independently of the operation feed limit. The response contains `period` (the selected value, or `null` when omitted), `timezone`, `today` (`amount_kopecks`, `count`), `total` (also `average_kopecks`, `payees`), seven `days` (`date`, amount, count), thirty `month` days with the same fields, 24 `hours` of today (`hour` from 0 to 23, amount, count), `categories` (category, amount, count), and `largest` (up to three full operations). Only `paid` records count; `payees` counts distinct INNs, and the average rounds to the nearest kopeck with halves rounded up (zero for no payments). The seven-day and thirty-day windows include today; `month` is a rolling thirty-calendar-day window. Days use each operation's `created_at` in the mandate time zone and include zero days, oldest first; the journal has no separate settlement timestamp. Hour buckets use the same time zone: a repeated daylight-saving hour is combined, and a skipped hour remains zero. When `period` is supplied, `total`, `categories` and `largest` include only paid operations with local dates in the selected window, including today and excluding future dates. Without `period`, these summaries cover all time for compatibility. `today`, `hours`, `days` and `month` keep their respective calendar windows regardless of the selected period. Unknown period values return HTTP 422. Missing categories form a `null` group. Categories sort by descending amount then category; largest payments sort by descending amount, creation time and id. The endpoint reads one snapshot of an existing initialized database without migrations, writes or bank calls.
 
 No sign-in for people yet: anyone who reaches the API can change any client's agents, so it listens on 127.0.0.1 only (uvicorn's default; never `--host 0.0.0.0`).
 

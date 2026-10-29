@@ -2,7 +2,7 @@
 
 A payment layer for companies' AI agents: an agent pays from the company account within the limits the client has set.
 
-The current prototype checks an agent's mandate, records each operation and sends permitted payments to an in-memory bank sandbox. It includes agent keys, limits, working hours, payee lists, status checks and a client app.
+The current prototype checks an agent's mandate, records each operation and sends permitted payments to a bank sandbox that keeps account balances. It includes agent keys, limits, working hours, payee lists, status checks and a client app.
 
 The target is B2B supplier payments from the client's existing bank account, through a bank's business API or the Bank of Russia Open API. Real bank integration, human approval, webhooks and card payments are planned; the sandbox does not implement the Bank of Russia Open API.
 
@@ -43,7 +43,7 @@ The target is B2B supplier payments from the client's existing bank account, thr
 | Block | Role |
 |---|---|
 | [`agent/`](demo/agent/) | Planned demo agent for invoice and card payments |
-| [`bank-sandbox/`](demo/bank-sandbox/) | Minimal HTTP payment sandbox; a real bank adapter comes later |
+| [`bank-sandbox/`](demo/bank-sandbox/) | Minimal HTTP bank sandbox: account balances and payments; a real bank adapter comes later |
 | [`shop/`](demo/shop/) | Planned test online shop for card payments (after MVP) |
 
 ## Run locally
@@ -86,7 +86,7 @@ npx @modelcontextprotocol/inspector -e SYNGRAPH_AGENT_KEY=sgk_... .venv/Scripts/
 
 Demo: pause the agent, lower its per-payment limit or switch **Payees** to **Only from the list** in the app — the next `pay_invoice` returns `"rejected"` with the reason. **Replace key** turns the old key off at once.
 
-Data lives in SQLite, `product/core/data/syngraph.db` (not in git). On first use it gets a demo client (id 1) with "Invoice agent" and its mandate from `product/core/rules.example.json`: weekdays 09:00–19:00 Moscow time, any payee, up to 100,000 RUB per payment, 500,000 per day, 1,500,000 per week, 3,000,000 per month; new agents start with the same rules. An older database is brought up to date on open. To start from scratch, delete `syngraph.db`. The bank sandbox keeps payments in memory: after its restart an old `"unknown"` becomes `"rejected"`.
+Data lives in SQLite, `product/core/data/syngraph.db` (not in git). On first use it gets a demo client (id 1) with "Invoice agent" and its mandate from `product/core/rules.example.json`: weekdays 09:00–19:00 Moscow time, any payee, up to 100,000 RUB per payment, 500,000 per day, 1,500,000 per week, 3,000,000 per month; new agents start with the same rules. An older database is brought up to date on open. To start from scratch, delete `syngraph.db`. The bank sandbox keeps balances and payments in `demo/bank-sandbox/data/bank.db` (not in git): account 1 of the demo client starts with 1,000,000 RUB; a payment above the balance is `"rejected"` with `"insufficient funds"`. Top up with `POST http://127.0.0.1:8001/accounts/1/deposit` and `{"amount_kopecks": …}`, check with `GET /accounts/1`.
 
 ## License
 

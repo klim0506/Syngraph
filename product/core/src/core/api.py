@@ -5,9 +5,10 @@ No sign-in yet: the client id comes in the path, so the API must listen on 127.0
 import re
 import sqlite3
 from collections.abc import Iterator
-from contextlib import contextmanager
-from datetime import datetime, time, timezone
-from typing import TypedDict
+from contextlib import closing, contextmanager
+from datetime import datetime, time, timedelta, timezone
+from typing import Literal, TypedDict
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 from . import db, keys, rules
 from .errors import InvalidRequest, MandateMisconfigured
 from .money import to_kopecks
-from .payments import check_inn, check_payee, refresh
+from .payments import check_inn, check_payee, decide, refresh
 
 app = FastAPI(title="Syngraph core")
 
@@ -42,13 +43,19 @@ class Agent(TypedDict):
     key_hint: str | None  # start and end of the current key, "sgk_Ab3x…9QzT"
     paused: bool
     any_counterparty: bool
+    any_amount: bool  # no amount limits: `limits` are kept but not checked
+    any_time: bool  # no working hours: the agent may pay at any time
     timezone: str
     working_days: list[str]  # "mon" ... "sun"
     working_from: str  # "09:00"
     working_to: str
     working_now: bool  # the agent may pay at this moment by the clock
-    limits: dict[str, int]  # kopecks per payment, day, week, month
+    limits: dict[str, int | None]  # kopecks per payment, day, week, month
     spent: dict[str, int]  # kopecks in the current day, week, month: paid, pending and unknown
+    approval: str  # auto | manual
+    category_mode: str  # any | only | except
+    allowed_categories: list[str]  # used with only
+    blocked_categories: list[str]  # used with except
 
 
 class NewKey(TypedDict):
@@ -65,20 +72,56 @@ class Operation(TypedDict):
     payee_inn: str
     amount_kopecks: int
     currency: str
+    category: str | None
     status: db.Status
     reason: str | None
 
 
-class NewAgent(BaseModel):
-    name: str
+class PaymentSummary(TypedDict):
+    amount_kopecks: int
+    count: int
+
+
+class PaymentTotal(PaymentSummary):
+    average_kopecks: int
+    payees: int
+
+
+class PaymentDay(PaymentSummary):
+    date: str
+
+
+class PaymentHour(PaymentSummary):
+    hour: int
+
+
+class PaymentCategory(PaymentSummary):
+    category: str | None
+
+
+StatisticsPeriod = Literal["day", "week", "month"]
+
+
+class AgentStatistics(TypedDict):
+    period: StatisticsPeriod | None
+    timezone: str
+    today: PaymentSummary
+    total: PaymentTotal
+    days: list[PaymentDay]
+    month: list[PaymentDay]
+    hours: list[PaymentHour]
+    categories: list[PaymentCategory]
+    largest: list[Operation]
 
 
 class AgentChange(BaseModel):
-    """Only the fields to change. Limits are rubles as strings, like "100000.00"."""
+    """Only the fields to change. Limits are rubles as strings, like "100000.00"; "" clears a day, week or month limit."""
     name: str | None = None
     icon: str | None = None
     paused: bool | None = None
     any_counterparty: bool | None = None
+    any_time: bool | None = None
+    any_amount: bool | None = None
     working_days: list[str] | None = None
     working_from: str | None = None
     working_to: str | None = None
@@ -86,11 +129,21 @@ class AgentChange(BaseModel):
     max_day: str | None = None
     max_week: str | None = None
     max_month: str | None = None
+    approval: str | None = None
+    category_mode: str | None = None
+    allowed_categories: list[str] | None = None
+    blocked_categories: list[str] | None = None
 
 
 class NewCounterparty(BaseModel):
     inn: str
     name: str = ""  # needed only for an INN the directory does not know
+
+
+class NewAgent(AgentChange):
+    """A new agent: a name, and any settings to start with instead of the defaults."""
+    name: str
+    payees: list[NewCounterparty] = []  # with any_counterparty false: whom the agent may pay
 
 
 @app.exception_handler(InvalidRequest)
@@ -132,6 +185,8 @@ def agent_view(conn: sqlite3.Connection, agent: sqlite3.Row) -> Agent:
         "key_hint": agent["secret_hint"],
         "paused": bool(agent["paused"]),
         "any_counterparty": bool(agent["any_counterparty"]),
+        "any_time": bool(agent["any_time"]),
+        "any_amount": bool(agent["any_amount"]),
         "timezone": agent["timezone"],
         "working_days": agent["working_days"].split(","),
         "working_from": agent["working_from"],
@@ -139,6 +194,10 @@ def agent_view(conn: sqlite3.Connection, agent: sqlite3.Row) -> Agent:
         "working_now": rules.is_working_time(agent, now),
         "limits": {name: agent[f"max_{name}_kopecks"] for name in PERIODS},
         "spent": rules.spent_by_period(conn, agent, now),
+        "approval": agent["approval"],
+        "category_mode": agent["category_mode"],
+        "allowed_categories": [c for c in agent["allowed_categories"].split(",") if c],
+        "blocked_categories": [c for c in agent["blocked_categories"].split(",") if c],
     }
 
 
@@ -152,8 +211,70 @@ def operation_view(row: sqlite3.Row) -> Operation:
         "payee_inn": row["payee_inn"],
         "amount_kopecks": row["amount_kopecks"],
         "currency": row["currency"],
+        "category": row["category"],
         "status": row["status"],
         "reason": row["reason"],
+    }
+
+
+def statistics_view(
+    conn: sqlite3.Connection, agent: sqlite3.Row, now: datetime, period: StatisticsPeriod | None = None
+) -> AgentStatistics:
+    """Paid operations, grouped by their creation date in the mandate's time zone."""
+    try:
+        zone = ZoneInfo(agent["timezone"])
+    except (ValueError, KeyError) as e:
+        raise MandateMisconfigured(f"mandate {agent['id']} has an invalid time zone: {e}") from e
+    today = now.astimezone(zone).date()
+    start = today - timedelta(days={"day": 0, "week": 6, "month": 29}[period]) if period else None
+    days: dict[str, PaymentDay] = {}
+    for offset in range(29, -1, -1):
+        day = (today - timedelta(days=offset)).isoformat()
+        days[day] = {"date": day, "amount_kopecks": 0, "count": 0}
+    hours: list[PaymentHour] = [{"hour": hour, "amount_kopecks": 0, "count": 0} for hour in range(24)]
+    categories: dict[str | None, PaymentCategory] = {}
+    largest: list[Operation] = []
+    payees: set[str] = set()
+    amount = count = 0
+    for row in db.paid_agent_transactions(conn, agent["client_id"], agent["agent_id"]):
+        local = datetime.fromisoformat(row["created_at"]).astimezone(zone)
+        day = local.date().isoformat()
+        if day in days:
+            days[day]["amount_kopecks"] += row["amount_kopecks"]
+            days[day]["count"] += 1
+        if local.date() == today:
+            hours[local.hour]["amount_kopecks"] += row["amount_kopecks"]
+            hours[local.hour]["count"] += 1
+        if start is not None and not start <= local.date() <= today:
+            continue
+        amount += row["amount_kopecks"]
+        count += 1
+        payees.add(row["payee_inn"])
+        category = categories.setdefault(
+            row["category"], {"category": row["category"], "amount_kopecks": 0, "count": 0}
+        )
+        category["amount_kopecks"] += row["amount_kopecks"]
+        category["count"] += 1
+        largest.append(operation_view(row))
+        largest.sort(key=lambda op: (op["amount_kopecks"], op["created_at"], op["id"]), reverse=True)
+        del largest[3:]
+    current = days[today.isoformat()]
+    month = list(days.values())
+    return {
+        "period": period,
+        "timezone": agent["timezone"],
+        "today": {"amount_kopecks": current["amount_kopecks"], "count": current["count"]},
+        "total": {
+            "amount_kopecks": amount,
+            "count": count,
+            "average_kopecks": (amount + count // 2) // count if count else 0,  # nearest kopeck, halves up
+            "payees": len(payees),
+        },
+        "days": month[-7:],
+        "month": month,
+        "hours": hours,
+        "categories": sorted(categories.values(), key=lambda c: (-c["amount_kopecks"], c["category"] or "")),
+        "largest": largest,
     }
 
 
@@ -171,6 +292,25 @@ def settings_from(change: AgentChange, mandate: sqlite3.Row) -> dict[str, object
         settings["paused"] = int(change.paused)
     if change.any_counterparty is not None:
         settings["any_counterparty"] = int(change.any_counterparty)
+    if change.any_time is not None:
+        settings["any_time"] = int(change.any_time)
+    if change.any_amount is not None:
+        settings["any_amount"] = int(change.any_amount)
+    if change.approval is not None:
+        if change.approval not in ("auto", "manual"):
+            raise InvalidRequest(f"approval must be 'auto' or 'manual', got {change.approval!r}")
+        settings["approval"] = change.approval
+    if change.category_mode is not None:
+        if change.category_mode not in ("any", "only", "except"):
+            raise InvalidRequest(f"category_mode must be 'any', 'only' or 'except', got {change.category_mode!r}")
+        settings["category_mode"] = change.category_mode
+    for field in ("allowed_categories", "blocked_categories"):
+        value = getattr(change, field)
+        if value is not None:
+            unknown = [c for c in value if c not in db.CATEGORIES]
+            if unknown:
+                raise InvalidRequest(f"category must be one of {db.CATEGORIES}, got {unknown}")
+            settings[field] = ",".join(c for c in db.CATEGORIES if c in value)  # keeps the list order
 
     if change.working_days is not None:
         days = [d for d in rules.WEEKDAYS if d in change.working_days]  # keeps the week order
@@ -194,11 +334,26 @@ def settings_from(change: AgentChange, mandate: sqlite3.Row) -> dict[str, object
     for name in PERIODS:
         value = getattr(change, f"max_{name}")
         if value is not None:
-            settings[f"max_{name}_kopecks"] = to_kopecks(value)
+            # an empty day, week or month limit: none for that period
+            settings[f"max_{name}_kopecks"] = None if value == "" and name != "payment" else to_kopecks(value)
     limits = [settings.get(f"max_{name}_kopecks", mandate[f"max_{name}_kopecks"]) for name in PERIODS]
+    limits = [limit for limit in limits if limit is not None]
     if limits != sorted(limits):
         raise InvalidRequest("limits must grow: per payment <= day <= week <= month")
     return settings
+
+
+def apply_change(conn: sqlite3.Connection, client_id: int, agent_id: int, change: AgentChange) -> None:
+    """Checks and writes a change of the agent; the caller commits."""
+    agent = agent_of(conn, client_id, agent_id)
+    settings = settings_from(change, agent)
+    if change.name is not None:
+        db.rename_agent(conn, agent_id, check_agent_name(change.name))
+    if change.icon is not None:
+        if change.icon not in db.AGENT_ICONS:
+            raise InvalidRequest(f"icon must be one of {db.AGENT_ICONS}, got {change.icon!r}")
+        db.set_agent_icon(conn, agent_id, change.icon)
+    db.update_mandate(conn, agent["id"], settings)
 
 
 @app.get("/api/clients/{client_id}/agents")
@@ -209,12 +364,19 @@ def get_agents(client_id: int) -> list[Agent]:
 
 @app.post("/api/clients/{client_id}/agents")
 def add_agent(client_id: int, new: NewAgent) -> Agent:
-    """A new agent with the default mandate and no key yet."""
+    """A new agent without a key: the default mandate with the given settings. A wrong setting creates nothing."""
     name = check_agent_name(new.name)
     with open_db() as conn:
         if conn.execute("SELECT 1 FROM clients WHERE id = ?", (client_id,)).fetchone() is None:
             raise HTTPException(404, f"client {client_id} not found")
         agent_id = db.create_agent(conn, client_id, name)
+        # an exception below leaves nothing: the commit comes last
+        apply_change(conn, client_id, agent_id, new)
+        mandate_id = agent_of(conn, client_id, agent_id)["id"]
+        for payee in new.payees:  # the list the agent may pay; checked like add_counterparty
+            check_inn(payee.inn)
+            row = db.find_counterparty(conn, payee.inn) or db.get_or_create_counterparty(conn, payee.inn, check_payee(payee.name))
+            db.allow_counterparty(conn, mandate_id, row["id"])
         conn.commit()
         return agent_view(conn, agent_of(conn, client_id, agent_id))
 
@@ -225,20 +387,22 @@ def get_agent(client_id: int, agent_id: int) -> Agent:
         return agent_view(conn, agent_of(conn, client_id, agent_id))
 
 
+@app.get("/api/clients/{client_id}/agents/{agent_id}/statistics")
+def get_agent_statistics(
+    client_id: int, agent_id: int, period: StatisticsPeriod | None = None
+) -> AgentStatistics:
+    """One read-only snapshot of all paid operations; no bank calls or database initialization."""
+    with closing(db.connect(read_only=True)) as conn:
+        conn.execute("BEGIN")
+        return statistics_view(conn, agent_of(conn, client_id, agent_id), datetime.now(timezone.utc), period)
+
+
 @app.patch("/api/clients/{client_id}/agents/{agent_id}")
 def change_agent(client_id: int, agent_id: int, change: AgentChange) -> Agent:
     with open_db() as conn:
         # Validate and save against the same settings, including concurrent limit changes.
         conn.execute("BEGIN IMMEDIATE")
-        agent = agent_of(conn, client_id, agent_id)
-        settings = settings_from(change, agent)
-        if change.name is not None:
-            db.rename_agent(conn, agent_id, check_agent_name(change.name))
-        if change.icon is not None:
-            if change.icon not in db.AGENT_ICONS:
-                raise InvalidRequest(f"icon must be one of {db.AGENT_ICONS}, got {change.icon!r}")
-            db.set_agent_icon(conn, agent_id, change.icon)
-        db.update_mandate(conn, agent["id"], settings)
+        apply_change(conn, client_id, agent_id, change)
         conn.commit()
         return agent_view(conn, agent_of(conn, client_id, agent_id))
 
@@ -252,6 +416,16 @@ def new_agent_key(client_id: int, agent_id: int) -> NewKey:
         db.set_agent_secret(conn, agent_id, key_hash, hint)
         conn.commit()
     return {"key": key, "hint": hint}
+
+
+@app.delete("/api/clients/{client_id}/agents/{agent_id}", status_code=204)
+def delete_agent(client_id: int, agent_id: int) -> Response:
+    """Deletes the agent: its key stops working at once, its payments stay in the history."""
+    with open_db() as conn:
+        agent_of(conn, client_id, agent_id)
+        db.delete_agent(conn, agent_id)
+        conn.commit()
+    return Response(status_code=204)
 
 
 @app.get("/api/clients/{client_id}/operations")
@@ -269,6 +443,22 @@ def check_operation(client_id: int, operation_id: str) -> Operation:
         if row is None:
             raise HTTPException(404, f"operation {operation_id!r} not found for client {client_id}")
         refresh(conn, row)
+        return operation_view(db.find_transaction(conn, client_id, operation_id))
+
+
+@app.post("/api/clients/{client_id}/operations/{operation_id}/approve")
+def approve_operation(client_id: int, operation_id: str) -> Operation:
+    """The client approves an awaiting payment: it goes to the bank without checking the rules again."""
+    decide(client_id, operation_id, approve=True)
+    with open_db() as conn:
+        return operation_view(db.find_transaction(conn, client_id, operation_id))
+
+
+@app.post("/api/clients/{client_id}/operations/{operation_id}/decline")
+def decline_operation(client_id: int, operation_id: str) -> Operation:
+    """The client declines an awaiting payment: it is rejected."""
+    decide(client_id, operation_id, approve=False)
+    with open_db() as conn:
         return operation_view(db.find_transaction(conn, client_id, operation_id))
 
 

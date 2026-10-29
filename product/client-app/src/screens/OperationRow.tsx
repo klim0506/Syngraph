@@ -1,26 +1,25 @@
 import { useState } from "react";
-import { checkOperation, Operation, rub, when } from "../api";
+import { approveOperation, checkOperation, declineOperation, Operation, rub, when } from "../api";
 import { serverText, useT } from "../i18n";
 
 type Props = {
   operation: Operation;
-  showAgent?: boolean; // in the feed of all agents
-  onChanged?: () => void; // after the bank was asked again
+  onChanged?: () => void; // after the bank was asked again or the person decided
 };
 
 /** One agent payment: payee, amount, status; tap to see the details. */
-export default function OperationRow({ operation: o, showAgent = false, onChanged }: Props) {
+export default function OperationRow({ operation: o, onChanged }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const reason = o.reason && serverText(t, o.reason);
 
-  async function check() {
+  async function run(action: (id: string) => Promise<unknown>) {
     setChecking(true);
     setError("");
     try {
-      await checkOperation(o.id);
+      await action(o.id);
       onChanged?.();
     } catch (e) {
       setError(serverText(t, (e as Error).message));
@@ -35,7 +34,6 @@ export default function OperationRow({ operation: o, showAgent = false, onChange
         <span className="op-left">
           <span className="op-payee">{o.payee}</span>
           <span className="muted">
-            {showAgent && `${o.agent_name} · `}
             {when(o.created_at, t.locale)}
           </span>
         </span>
@@ -64,6 +62,12 @@ export default function OperationRow({ operation: o, showAgent = false, onChange
             <dd>{o.agent_name}</dd>
             <dt>{t.inn}</dt>
             <dd className="num">{o.payee_inn}</dd>
+            {o.category && (
+              <>
+                <dt>{t.category}</dt>
+                <dd>{t.categoryNames[o.category] ?? o.category}</dd>
+              </>
+            )}
             {reason && (
               <>
                 <dt>{t.reason}</dt>
@@ -77,9 +81,23 @@ export default function OperationRow({ operation: o, showAgent = false, onChange
           </dl>
         </div>
       )}
+      {o.status === "awaiting" && ( // the decision is the point: shown without opening the row
+        <div className="op-actions">
+          {reason && !open && <p className="muted">{reason}</p>}
+          <div className="key-actions">
+            <button type="button" className="btn-primary" disabled={checking} onClick={() => run(approveOperation)}>
+              {t.approve}
+            </button>
+            <button type="button" className="btn-secondary" disabled={checking} onClick={() => run(declineOperation)}>
+              {t.decline}
+            </button>
+          </div>
+          {error && <div className="error">{error}</div>}
+        </div>
+      )}
       {open && o.status === "unknown" && (
         <div className="op-actions">
-          <button type="button" className="btn-secondary" disabled={checking} onClick={check}>
+          <button type="button" className="btn-secondary" disabled={checking} onClick={() => run(checkOperation)}>
             {checking ? t.askingBank : t.checkBank}
           </button>
           {error && <div className="error">{error}</div>}

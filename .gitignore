@@ -13,6 +13,7 @@ __pycache__/
 
 # Runtime data
 product/core/data/
+demo/bank-sandbox/data/
 .venv/
 dist/
 build/

@@ -1,13 +1,14 @@
-import { SlidersHorizontal } from "lucide-react";
-import { useState } from "react";
-import { Agent, Operation } from "../api";
+import { Search, SlidersHorizontal } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Operation, when } from "../api";
 import { useT } from "../i18n";
+import { EmptyIllustration } from "../icons";
 import OperationRow from "./OperationRow";
 
-type Status = "all" | "paid" | "rejected" | "unknown";
-const STATUSES: Status[] = ["all", "paid", "rejected", "unknown"];
+type Status = "all" | "awaiting" | "paid" | "rejected" | "unknown";
+const STATUSES: Status[] = ["all", "awaiting", "paid", "rejected", "unknown"];
 type Period = "all" | "today" | "week" | "month";
-const PERIODS: Period[] = ["today", "week", "month", "all"];
+const PERIODS: Period[] = ["all", "today", "week", "month"];
 
 /** Start of the period in the viewer's time zone; the week starts on Monday. */
 function periodStart(period: Period): Date | null {
@@ -19,103 +20,105 @@ function periodStart(period: Period): Date | null {
   return start;
 }
 
+/** What the search looks through: payee, INN, the amount in whole rubles ("25000") and the date ("29.10.2026", "29 Oct"). */
+function searchText(o: Operation, locale: string): string {
+  const d = new Date(o.created_at);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const rubles = String(Math.floor(o.amount_kopecks / 100)); // kopecks are not searched
+  return [o.payee, o.payee_inn, rubles, `${dd}.${mm}.${d.getFullYear()}`, when(o.created_at, locale)].join(" | ").toLowerCase();
+}
+
 type Props = {
-  agents: Agent[];
-  operations: Operation[];
+  operations: Operation[]; // one agent's
   onChanged: () => void;
-  agent?: Agent; // inside one agent: only its payments, no agent filter
 };
 
-/** History: payments of all the client's agents, or of one, with filters. */
-export default function History({ agents, operations, onChanged, agent }: Props) {
+/** An agent's payments: a search over everything, the period and status behind the filter button. */
+export default function History({ operations, onChanged }: Props) {
   const t = useT();
   const [status, setStatus] = useState<Status>("all");
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState(""); // payee name or INN
-  const [agentId, setAgentId] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
   const [period, setPeriod] = useState<Period>("all");
+  const [open, setOpen] = useState(false); // the filter pop-up
+  const box = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
 
   const since = periodStart(period);
-  const q = query.trim().toLowerCase();
-  const filtered = operations.filter(
-    (o) =>
-      (agent ? o.agent_id === agent.id : agentId === null || o.agent_id === agentId) &&
-      (!since || new Date(o.created_at) >= since) &&
-      (!q || o.payee.toLowerCase().includes(q) || o.payee_inn.startsWith(q)),
-  );
+  // every word must be found; "25 000" is one amount, and kopecks are dropped: "25000,50" and "25000.50" find 25 000
+  const words = query
+    .toLowerCase()
+    .replace(/(\d)[\s\u2009](?=\d{3}\b)/g, "$1")
+    .replace(/(\d),\d*/g, "$1")
+    .replace(/(\d{3,})\.\d*/g, "$1") // "29.10" stays a date
+    .split(/\s+/)
+    .filter(Boolean);
+  const filtered = operations.filter((o) => {
+    if (since && new Date(o.created_at) < since) return false;
+    const text = searchText(o, t.locale);
+    return words.every((w) => text.includes(w));
+  });
   const shown = status === "all" ? filtered : filtered.filter((o) => o.status === status);
-  const active = Number(agentId !== null) + Number(period !== "all") + Number(q !== "");
-
-  const filterButton = (
-    <button type="button" className={`btn-icon ${active ? "on" : ""}`} aria-expanded={open} aria-label={t.filters} title={t.filters} onClick={() => setOpen(!open)}>
-      <SlidersHorizontal size={18} strokeWidth={1.75} aria-hidden />
-      {active > 0 && <span className="btn-icon-count">{active}</span>}
-    </button>
-  );
-
-  function reset() {
-    setQuery("");
-    setAgentId(null);
-    setPeriod("all");
-  }
+  const active = period !== "all" || status !== "all";
 
   return (
     <>
-      {!agent && (
-        <div className="title-row">
-          <h1>{t.tabs.history}</h1>
-          {filterButton}
-        </div>
-      )}
-
-      {open && (
-        <section className="card filters">
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t.searchPayee} aria-label={t.searchPayee} inputMode="search" />
-          {!agent && (
-            <select className="select" value={agentId ?? ""} onChange={(e) => setAgentId(e.target.value ? Number(e.target.value) : null)} aria-label={t.agent}>
-              <option value="">{t.allAgents}</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <div className="chips chips-tight" role="group" aria-label={t.period}>
-            {PERIODS.map((p) => (
-              <button key={p} type="button" aria-pressed={period === p} onClick={() => setPeriod(p)}>
-                {t.periods[p]}
+      <div className="filters" ref={box}>
+        <label className="search">
+          <Search size={16} strokeWidth={1.75} aria-hidden />
+          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t.search} aria-label={t.searchPayee} />
+        </label>
+        <button type="button" className={`filter-button ${active ? "on" : ""}`} aria-expanded={open} aria-label={t.filters} title={t.filters} onClick={() => setOpen(!open)}>
+          <SlidersHorizontal size={18} strokeWidth={1.75} aria-hidden />
+        </button>
+        {open && (
+          <div className="filter-pop" role="dialog" aria-label={t.filters}>
+            <label className="filter-field">
+              <span className="muted">{t.period}</span>
+              <select className="select" value={period} onChange={(event) => setPeriod(event.target.value as Period)}>
+                {PERIODS.map((p) => <option key={p} value={p}>{t.periods[p]}</option>)}
+              </select>
+            </label>
+            <label className="filter-field">
+              <span className="muted">{t.statusLabel}</span>
+              <select className="select" value={status} onChange={(event) => setStatus(event.target.value as Status)}>
+                {STATUSES.map((s) => {
+                  const count = s === "all" ? filtered.length : filtered.filter((o) => o.status === s).length;
+                  if ((s === "unknown" || s === "awaiting") && count === 0 && status !== s) return null;
+                  return <option key={s} value={s}>{t.filter[s]} {count}</option>;
+                })}
+              </select>
+            </label>
+            {active && (
+              <button type="button" className="link" onClick={() => { setPeriod("all"); setStatus("all"); }}>
+                {t.resetFilters}
               </button>
-            ))}
+            )}
           </div>
-          {active > 0 && (
-            <button type="button" className="link" onClick={reset}>
-              {t.resetFilters}
-            </button>
-          )}
-        </section>
-      )}
-
-      <div className="status-row">
-        <div className="chips" role="group">
-          {STATUSES.map((s) => {
-            const count = s === "all" ? filtered.length : filtered.filter((o) => o.status === s).length;
-            if (s === "unknown" && count === 0 && status !== s) return null;
-            return (
-              <button key={s} type="button" aria-pressed={status === s} onClick={() => setStatus(s)}>
-                {t.filter[s]} <span className="count">{count}</span>
-              </button>
-            );
-          })}
-        </div>
-        {agent && filterButton}
+        )}
       </div>
+
       {shown.length === 0 ? (
-        <div className="empty">{t.nothingHere}</div>
+        <div className="history-empty" role="status">
+          <EmptyIllustration kind="history" />
+          <p className="muted">{operations.length === 0 ? t.nothingHere : t.noMatches}</p>
+        </div>
       ) : (
         <ul className="ops card">
           {shown.map((o) => (
-            <OperationRow key={o.id} operation={o} showAgent={!agent} onChanged={onChanged} />
+            <OperationRow key={o.id} operation={o} onChanged={onChanged} />
           ))}
         </ul>
       )}

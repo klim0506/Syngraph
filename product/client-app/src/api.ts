@@ -5,6 +5,11 @@ export type Period = "payment" | "day" | "week" | "month";
 export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 export const WEEKDAYS: Weekday[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 export type AgentIcon = "invoice" | "cart" | "plane" | "truck" | "briefcase" | "building" | "card" | "bank";
+/** What a payment is for; the agent names one with each payment (core: db.CATEGORIES). */
+export const CATEGORIES = ["goods", "office", "it", "marketing", "rent", "transport", "travel", "services", "taxes", "entertainment"] as const;
+export type Category = (typeof CATEGORIES)[number];
+export type Approval = "auto" | "manual"; // auto: the person decides only what breaks the rules; manual: every payment
+export type CategoryMode = "any" | "only" | "except";
 
 /** An agent with its own mandate. */
 export type Agent = {
@@ -15,21 +20,29 @@ export type Agent = {
   key_hint: string | null; // start and end of the current key, "sgk_Ab3x…9QzT"; older keys: the end only
   paused: boolean;
   any_counterparty: boolean;
+  any_time: boolean; // no working hours: the agent may pay at any time
+  any_amount: boolean; // no amount limits: `limits` are kept but not checked
   timezone: string;
   working_days: Weekday[];
   working_from: string; // "09:00"
   working_to: string;
   working_now: boolean;
-  limits: Record<Period, number>; // kopecks
+  limits: Record<Period, number | null>; // kopecks; null: no limit for the day, week or month
   spent: Record<Exclude<Period, "payment">, number>; // kopecks: paid, pending and unknown
+  approval: Approval;
+  category_mode: CategoryMode;
+  allowed_categories: Category[]; // used with "only"
+  blocked_categories: Category[]; // used with "except"
 };
 
-/** Only the fields to change. Limits are rubles as strings, like "100000.00". */
+/** Only the fields to change. Limits are rubles as strings, like "100000.00"; "" clears a day, week or month limit. */
 export type AgentChange = Partial<{
   name: string;
   icon: AgentIcon;
   paused: boolean;
   any_counterparty: boolean;
+  any_time: boolean;
+  any_amount: boolean;
   working_days: Weekday[];
   working_from: string;
   working_to: string;
@@ -37,9 +50,13 @@ export type AgentChange = Partial<{
   max_day: string;
   max_week: string;
   max_month: string;
+  approval: Approval;
+  category_mode: CategoryMode;
+  allowed_categories: Category[];
+  blocked_categories: Category[];
 }>;
 
-export type Status = "pending" | "paid" | "rejected" | "unknown";
+export type Status = "awaiting" | "pending" | "paid" | "rejected" | "unknown"; // awaiting: the person approves or declines
 
 export type Operation = {
   id: string;
@@ -50,8 +67,22 @@ export type Operation = {
   payee_inn: string;
   amount_kopecks: number;
   currency: string;
+  category: Category | null; // null in older operations
   status: Status;
   reason: string | null;
+};
+
+export type StatisticsPeriod = "day" | "week" | "month";
+export type AgentStatistics = {
+  period: StatisticsPeriod | null;
+  timezone: string;
+  today: { amount_kopecks: number; count: number };
+  total: { amount_kopecks: number; count: number; average_kopecks: number; payees: number };
+  days: { date: string; amount_kopecks: number; count: number }[];
+  month: { date: string; amount_kopecks: number; count: number }[];
+  hours: { hour: number; amount_kopecks: number; count: number }[];
+  categories: { category: Category | null; amount_kopecks: number; count: number }[];
+  largest: Operation[];
 };
 
 export type Counterparty = { inn: string; name: string };
@@ -80,12 +111,22 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 const client = `/clients/${CLIENT_ID}`;
 
 export const getAgents = () => call<Agent[]>("GET", `${client}/agents`);
-export const addAgent = (name: string) => call<Agent>("POST", `${client}/agents`, { name });
+/** One paid calendar window, aggregated from the full journal in the mandate's time zone. */
+export const getAgentStatistics = (id: number, period: StatisticsPeriod) => call<AgentStatistics>("GET", `${client}/agents/${id}/statistics?period=${period}`);
+/** A new agent; settings not given take the defaults. A wrong setting creates nothing. */
+export const addAgent = (name: string, settings: AgentChange = {}, payees: Counterparty[] = []) =>
+  call<Agent>("POST", `${client}/agents`, { ...settings, name, payees });
 export const changeAgent = (id: number, change: AgentChange) => call<Agent>("PATCH", `${client}/agents/${id}`, change);
 /** Creates or replaces the agent's key. The key comes only in this answer. */
 export const newAgentKey = (id: number) => call<{ key: string; hint: string }>("POST", `${client}/agents/${id}/key`);
 
+/** Deletes the agent: its key stops working at once; the core keeps its payments, the app no longer shows them. */
+export const deleteAgent = (id: number) => call<void>("DELETE", `${client}/agents/${id}`);
+
 export const getOperations = () => call<Operation[]>("GET", `${client}/operations?limit=100`);
+/** The person's decision on an awaiting payment; an approved one goes to the bank. */
+export const approveOperation = (id: string) => call<Operation>("POST", `${client}/operations/${id}/approve`);
+export const declineOperation = (id: string) => call<Operation>("POST", `${client}/operations/${id}/decline`);
 /** Asks the bank again about an unknown operation. */
 export const checkOperation = (id: string) => call<Operation>("POST", `${client}/operations/${id}/check`);
 
