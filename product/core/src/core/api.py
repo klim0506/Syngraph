@@ -95,11 +95,26 @@ class PaymentHour(PaymentSummary):
     hour: int
 
 
+class RollingPaymentHour(PaymentSummary):
+    start: str
+    end: str
+
+
 class PaymentCategory(PaymentSummary):
     category: str | None
 
 
-StatisticsPeriod = Literal["day", "week", "month"]
+StatisticsPeriod = Literal["today", "day", "week", "month"]
+OperationFlow = Literal["allowed", "rejected", "cancelled", "approved", "awaiting", "unknown"]
+
+
+class OperationFlows(TypedDict):
+    allowed: int
+    rejected: int
+    cancelled: int
+    approved: int
+    awaiting: int
+    unknown: int
 
 
 class AgentStatistics(TypedDict):
@@ -107,9 +122,13 @@ class AgentStatistics(TypedDict):
     timezone: str
     today: PaymentSummary
     total: PaymentTotal
+    operations_count: int
+    success_rate: float | None
+    flows: OperationFlows
     days: list[PaymentDay]
     month: list[PaymentDay]
     hours: list[PaymentHour]
+    rolling_hours: list[RollingPaymentHour]
     categories: list[PaymentCategory]
     largest: list[Operation]
 
@@ -217,27 +236,70 @@ def operation_view(row: sqlite3.Row) -> Operation:
     }
 
 
+def operation_flow(row: sqlite3.Row) -> OperationFlow:
+    """The approval path, independent of an approved payment's eventual bank result."""
+    state = row["approval_state"] if "approval_state" in row.keys() else None
+    if state == "approved":
+        return "approved"
+    if state == "declined":
+        return "cancelled"
+    if state == "awaiting" and row["status"] == "awaiting":
+        return "awaiting"
+    if state == "not_requested":
+        if row["status"] == "rejected":
+            return "rejected"
+        if row["status"] in ("paid", "pending", "unknown"):
+            return "allowed"
+    return "unknown"
+
+
 def statistics_view(
     conn: sqlite3.Connection, agent: sqlite3.Row, now: datetime, period: StatisticsPeriod | None = None
 ) -> AgentStatistics:
-    """Paid operations, grouped by their creation date in the mandate's time zone."""
+    """Operation paths and paid spending in the mandate's time zone."""
     try:
         zone = ZoneInfo(agent["timezone"])
     except (ValueError, KeyError) as e:
         raise MandateMisconfigured(f"mandate {agent['id']} has an invalid time zone: {e}") from e
-    today = now.astimezone(zone).date()
-    start = today - timedelta(days={"day": 0, "week": 6, "month": 29}[period]) if period else None
+    now_utc = now.astimezone(timezone.utc)
+    today = now_utc.astimezone(zone).date()
+    calendar_days = {"today": 0, "week": 6, "month": 29}.get(period)
+    start = today - timedelta(days=calendar_days) if calendar_days is not None else None
+    rolling_start = now_utc - timedelta(hours=24)
     days: dict[str, PaymentDay] = {}
     for offset in range(29, -1, -1):
         day = (today - timedelta(days=offset)).isoformat()
         days[day] = {"date": day, "amount_kopecks": 0, "count": 0}
     hours: list[PaymentHour] = [{"hour": hour, "amount_kopecks": 0, "count": 0} for hour in range(24)]
+    rolling_hours: list[RollingPaymentHour] = [
+        {
+            "start": (rolling_start + timedelta(hours=hour)).isoformat().replace("+00:00", "Z"),
+            "end": (rolling_start + timedelta(hours=hour + 1)).isoformat().replace("+00:00", "Z"),
+            "amount_kopecks": 0,
+            "count": 0,
+        }
+        for hour in range(24)
+    ]
     categories: dict[str | None, PaymentCategory] = {}
     largest: list[Operation] = []
     payees: set[str] = set()
     amount = count = 0
-    for row in db.paid_agent_transactions(conn, agent["client_id"], agent["agent_id"]):
-        local = datetime.fromisoformat(row["created_at"]).astimezone(zone)
+    operations_count = 0
+    flows: OperationFlows = {"allowed": 0, "rejected": 0, "cancelled": 0, "approved": 0, "awaiting": 0, "unknown": 0}
+    for row in db.agent_transactions(conn, agent["client_id"], agent["agent_id"]):
+        created = datetime.fromisoformat(row["created_at"]).astimezone(timezone.utc)
+        if period is not None and created > now_utc:
+            continue
+        local = created.astimezone(zone)
+        selected = (
+            (period != "day" or rolling_start <= created <= now_utc)
+            and (start is None or start <= local.date() <= today)
+        )
+        if selected:
+            operations_count += 1
+            flows[operation_flow(row)] += 1
+        if row["status"] != "paid":
+            continue
         day = local.date().isoformat()
         if day in days:
             days[day]["amount_kopecks"] += row["amount_kopecks"]
@@ -245,7 +307,11 @@ def statistics_view(
         if local.date() == today:
             hours[local.hour]["amount_kopecks"] += row["amount_kopecks"]
             hours[local.hour]["count"] += 1
-        if start is not None and not start <= local.date() <= today:
+        if rolling_start <= created <= now_utc:
+            hour = min((created - rolling_start) // timedelta(hours=1), 23)
+            rolling_hours[hour]["amount_kopecks"] += row["amount_kopecks"]
+            rolling_hours[hour]["count"] += 1
+        if not selected:
             continue
         amount += row["amount_kopecks"]
         count += 1
@@ -270,9 +336,13 @@ def statistics_view(
             "average_kopecks": (amount + count // 2) // count if count else 0,  # nearest kopeck, halves up
             "payees": len(payees),
         },
+        "operations_count": operations_count,
+        "success_rate": ((count * 1000 + operations_count // 2) // operations_count) / 10 if operations_count else None,
+        "flows": flows,
         "days": month[-7:],
         "month": month,
         "hours": hours,
+        "rolling_hours": rolling_hours,
         "categories": sorted(categories.values(), key=lambda c: (-c["amount_kopecks"], c["category"] or "")),
         "largest": largest,
     }

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Agent, deleteAgent, newAgentKey } from "../api";
 import { serverText, useT } from "../i18n";
+import { usePhoneBack, usePhoneNavigationBlock } from "../PhoneNavigation";
 
 /** The key is the first card on Control, with the existing one-time copy flow. */
 export function AgentKey({ agent, onChanged }: { agent: Agent; onChanged: () => void }) {
@@ -9,6 +10,7 @@ export function AgentKey({ agent, onChanged }: { agent: Agent; onChanged: () => 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const hint = agent.key_hint;
+  usePhoneNavigationBlock(busy);
   const shownHint = !hint ? "—" : hint.includes("…")
     ? `${hint.replace(/^sgk_/, "").slice(0, 2)}…${hint.slice(-4)}`
     : `…${hint.slice(-4)}`;
@@ -65,6 +67,11 @@ export function DeleteAgent({ agent, onDeleted }: { agent: Agent; onDeleted: () 
   const [deleting, setDeleting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  usePhoneNavigationBlock(busy);
+  usePhoneBack(deleting, () => {
+    if (!busy) { setDeleting(false); setError(""); }
+  }, "inline");
 
   async function remove() {
     if (busy) return;

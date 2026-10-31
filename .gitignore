@@ -24,12 +24,8 @@ build/
 .DS_Store
 Thumbs.db
 
-# Agent files
+# Local project notes
 AGENTS.md
-CLAUDE.md
-.claude/
-.codex/
-.cursor/
 TASKS.md
 DECISIONS.md
 

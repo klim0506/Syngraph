@@ -13,5 +13,9 @@ class MandateMisconfigured(Exception):
     """The client's mandate settings are broken: only the client can fix them."""
 
 
+class BankUnavailable(Exception):
+    """The bank did not answer a question: nothing has changed, ask again later."""
+
+
 class BankUnconfirmed(Exception):
     """The bank did not confirm the order. It is not a refusal: the payment may have gone through."""

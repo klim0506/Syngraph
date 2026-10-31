@@ -2,6 +2,7 @@ import { ArrowLeftRight, LineChart, SlidersHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Agent, changeAgent, Operation } from "../api";
 import { serverText, useT } from "../i18n";
+import { usePhoneBack, usePhoneNavigationBlock } from "../PhoneNavigation";
 import { AgentKey, DeleteAgent } from "./AgentSettings";
 import Counterparties from "./Counterparties";
 import History from "./History";
@@ -14,17 +15,20 @@ const SECTION_ICONS = { statistics: LineChart, limits: SlidersHorizontal, histor
 
 type Props = {
   agent: Agent;
-  section?: Section; // what to show first
+  section?: Section;
+  onSection: (section: Section) => void;
   operations: Operation[]; // this agent's only
   onAgent: (a: Agent) => void;
   onDeleted: () => void;
   onChanged: () => void;
 };
 
-export default function AgentScreen({ agent, section: first, operations, onAgent, onDeleted, onChanged }: Props) {
+export default function AgentScreen({ agent, section: current, onSection: setSection, operations, onAgent, onDeleted, onChanged }: Props) {
   const t = useT();
-  const [section, setSection] = useState<Section>(first ?? (agent.has_key ? "statistics" : "limits"));
+  const section = current ?? (agent.has_key ? "statistics" : "limits");
   const panel = useRef<HTMLDivElement>(null);
+  const [focusedOperation, setFocusedOperation] = useState<Operation | null>(null);
+  useEffect(() => { if (section !== "history") setFocusedOperation(null); }, [section, agent.id]);
   const [asking, setAsking] = useState(false); // confirming that payments stop or start
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -36,6 +40,9 @@ export default function AgentScreen({ agent, section: first, operations, onAgent
     setAsking(false);
     setError("");
   }
+
+  usePhoneNavigationBlock(busy);
+  usePhoneBack(asking, () => { if (!busy) cancel(); }, "modal");
 
   useEffect(() => {
     if (!asking) return;
@@ -78,19 +85,19 @@ export default function AgentScreen({ agent, section: first, operations, onAgent
       )}
 
       <div ref={panel} className="agent-panel" id="agent-panel" role="tabpanel" aria-labelledby={`agent-tab-${section}`}>
-        {section === "statistics" && <Statistics key={agent.id} agentId={agent.id} operations={operations} />}
-        {section === "history" && <History operations={operations} onChanged={onChanged} />}
+        {section === "statistics" && <Statistics key={agent.id} agentId={agent.id} operations={operations} onOperation={(operation) => { setFocusedOperation(operation); setSection("history"); }} />}
+        {section === "history" && <History operations={operations} onChanged={onChanged} focusedOperation={focusedOperation?.agent_id === agent.id ? focusedOperation : null} />}
         {section === "limits" && (
           <>
             <AgentKey agent={agent} onChanged={onChanged} />
             <Limits agent={agent} onAgent={onAgent} payees={<Counterparties agent={agent} onAgent={onAgent} />} />
-            <DeleteAgent agent={agent} onDeleted={onDeleted} />
             <section className="card agent-payment-control">
               <label className="switch-row">
                 <span>{t.payments}</span>
                 <input type="checkbox" role="switch" className={`pay-switch ${agent.paused ? "off" : "on"}`} checked={!agent.paused} disabled={busy || asking} title={agent.paused ? t.stopped : t.payments} onChange={() => setAsking(true)} />
               </label>
             </section>
+            <DeleteAgent agent={agent} onDeleted={onDeleted} />
           </>
         )}
       </div>

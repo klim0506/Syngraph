@@ -8,7 +8,7 @@ from typing import Literal, NotRequired, TypedDict
 
 import httpx
 
-from .errors import BankUnconfirmed
+from .errors import BankUnavailable, BankUnconfirmed
 
 BANK_URL = os.environ.get("BANK_URL", "http://127.0.0.1:8001")
 
@@ -50,6 +50,19 @@ def get_payment(operation_id: str) -> BankReply | None:
         return read_reply(response)
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
         raise BankUnconfirmed(str(e)) from e
+
+
+def get_balance(account: int) -> int:
+    """Kopecks on the client's account. Raises BankUnavailable if the bank does not answer clearly."""
+    try:
+        response = httpx.get(f"{BANK_URL}/accounts/{account}")
+        response.raise_for_status()
+        balance = response.json()["balance_kopecks"]
+        if not isinstance(balance, int):
+            raise ValueError("the account balance must be whole kopecks")
+        return balance
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+        raise BankUnavailable(str(e)) from e
 
 
 def read_reply(response: httpx.Response) -> BankReply:

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { addAgent, Agent, AgentIcon, Counterparty, findByInn, newAgentKey } from "../api";
 import { serverText, useT } from "../i18n";
+import { usePhoneBack, usePhoneNavigationBlock } from "../PhoneNavigation";
 import { AgentGlyph, ICONS } from "../icons";
 import { FreshKey } from "./AgentSettings";
 import { PayeeList } from "./Counterparties";
@@ -39,6 +40,13 @@ export default function NewAgent({ onCreated, onDone }: Props) {
   const [created, setCreated] = useState<{ agent: Agent; key: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  usePhoneNavigationBlock(busy);
+  usePhoneBack(step > 1, () => {
+    if (busy) return;
+    if (step === 3 && created) onDone(created.agent);
+    else { setStep(1); setError(""); }
+  }, "screen");
 
   function next(e: FormEvent) {
     e.preventDefault();

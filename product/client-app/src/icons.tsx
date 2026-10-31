@@ -1,6 +1,8 @@
 // Agent icons from Lucide (ISC license): blue lines on white. Keys match AGENT_ICONS in the core.
-import { Briefcase, Building2, CreditCard, FileText, Landmark, type LucideIcon, Plane, ShoppingCart, Truck } from "lucide-react";
+import { Briefcase, Building2, CreditCard, FileText, Landmark, type LucideIcon, Plane, Plus, ShoppingCart, Truck } from "lucide-react";
+import { useEffect, useRef } from "react";
 import type { AgentIcon } from "./api";
+import { useT } from "./i18n";
 
 const GLYPHS: Record<AgentIcon, LucideIcon> = {
   invoice: FileText,
@@ -30,9 +32,25 @@ export function AgentGlyph({ icon, size = 20 }: { icon: AgentIcon; size?: number
 }
 
 /** Matching illustrations for an empty agent list and an empty payment journal. */
-export function EmptyIllustration({ kind }: { kind: "agents" | "history" }) {
+export function EmptyIllustration({ kind, onAction }: { kind: "agents" | "history"; onAction?: () => void }) {
+  const t = useT();
+  const artwork = useRef<SVGSVGElement>(null);
+  const hovering = useRef(false);
+  const boost = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (boost.current !== null) clearTimeout(boost.current); }, []);
+  const speed = (rate: number) => artwork.current?.getAnimations({ subtree: true }).forEach((animation) => animation.updatePlaybackRate(rate));
+  const reset = () => {
+    if (boost.current !== null) clearTimeout(boost.current);
+    boost.current = null;
+    speed(hovering.current ? 2 : 1);
+  };
   return (
-    <svg className="empty-art" viewBox="0 0 200 176" fill="none" aria-hidden="true">
+    <span className="empty-art-wrap">
+    <svg ref={artwork} className="empty-art" viewBox="0 0 200 176" fill="none" aria-hidden="true"
+      onPointerEnter={(event) => { if (event.pointerType !== "touch") { hovering.current = true; if (boost.current === null) speed(2); } }}
+      onPointerLeave={(event) => { if (event.pointerType !== "touch") { hovering.current = false; reset(); } }}
+      onPointerDown={() => { reset(); speed(4); boost.current = setTimeout(() => { boost.current = null; speed(hovering.current ? 2 : 1); }, 1200); }}
+      onPointerCancel={reset}>
       <circle cx="100" cy="86" r="72" fill="var(--blue-soft)" />
       <circle cx="100" cy="86" r="84" stroke="var(--line)" strokeDasharray="3 8" />
       <rect x="52" y="34" width="96" height="118" rx="13" fill="var(--card)" stroke="var(--line)" transform="rotate(-14 100 93)" />
@@ -63,11 +81,16 @@ export function EmptyIllustration({ kind }: { kind: "agents" | "history" }) {
           </>
         )}
       </g>
-      <circle cx="146" cy="135" r="23" fill="var(--blue)" stroke="var(--page)" strokeWidth="5" />
-      <path d={kind === "history" ? "M136 131H154L150 127M156 139H138L142 143" : "M146 125V145M136 135H156"} stroke="var(--card)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M31 56V64M27 60H35M168 34V44M163 39H173" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" opacity=".55" />
-      <circle cx="27" cy="121" r="3" fill="var(--blue)" opacity=".35" />
-      <circle cx="176" cy="88" r="3" fill="var(--blue)" opacity=".25" />
+      {!(kind === "agents" && onAction) && <>
+        <circle cx="146" cy="135" r="23" fill="var(--blue)" stroke="var(--page)" strokeWidth="5" />
+        <path d={kind === "history" ? "M136 131H154L150 127M156 139H138L142 143" : "M146 125V145M136 135H156"} stroke="var(--card)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </>}
+      <g className="empty-art-orbit empty-art-orbit-one"><g><path d="M31 56V64M27 60H35" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" opacity=".55" /></g></g>
+      <g className="empty-art-orbit empty-art-orbit-two"><g><path d="M164 37V47M159 42H169" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" opacity=".55" /></g></g>
+      <g className="empty-art-orbit empty-art-orbit-three"><circle cx="27" cy="121" r="3" fill="var(--blue)" opacity=".35" /></g>
+      <g className="empty-art-orbit empty-art-orbit-four"><circle cx="176" cy="88" r="3" fill="var(--blue)" opacity=".25" /></g>
     </svg>
+    {kind === "agents" && onAction && <button type="button" className="empty-art-action" onClick={onAction} aria-label={t.connectAgent} title={t.connectAgent}><Plus size={32} strokeWidth={1.5} aria-hidden /></button>}
+    </span>
   );
 }

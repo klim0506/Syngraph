@@ -1,6 +1,6 @@
 import { Check } from "lucide-react";
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { Agent, AgentChange, Approval, CATEGORIES, Category, CategoryMode, changeAgent, Period, rub, Weekday, WEEKDAYS } from "../api";
+import { Agent, AgentChange, Approval, CATEGORIES, Category, CategoryMode, changeAgent, Period, Weekday, WEEKDAYS } from "../api";
 import { serverText, useT } from "../i18n";
 
 export const PERIODS: Period[] = ["payment", "day", "week", "month"];
@@ -142,7 +142,7 @@ type FieldsProps = {
   onEdit: (next: Draft) => void;
   onCommit?: () => void; // a field was left, a switch flipped: time to save
   busy: boolean;
-  agent?: Agent; // to show what is spent
+  agent?: Agent; // for saved approval rules
   payees: ReactNode; // whom the agent may pay, after the categories
 };
 
@@ -198,12 +198,10 @@ export function LimitFields({ draft, onEdit, onCommit, busy, agent, payees }: Fi
         {!draft.anyAmount && (
           <div className="rule-gap">
             {PERIODS.map((period) => {
-              const spent = !agent || period === "payment" ? null : agent.spent[period];
               return (
                 <label className="field" key={period}>
                   <span className="field-label">
                     {t.limit[period]}
-                    {spent !== null && <small>{t.spentNow(rub(spent))}</small>}
                   </span>
                   <span className="money-input">
                     <input

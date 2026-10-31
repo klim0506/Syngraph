@@ -1,6 +1,6 @@
 # Syngraph
 
-A payment layer for companies' AI agents: an agent pays from the company account within the limits the client has set.
+A payment layer for companies' software agents: an agent pays from the company account within the limits the client has set.
 
 The current prototype checks an agent's mandate, records each operation and sends permitted payments to a bank sandbox that keeps account balances. It includes agent keys, limits, working hours, payee lists, status checks and a client app.
 
@@ -28,7 +28,7 @@ The target is B2B supplier payments from the client's existing bank account, thr
 | Block | Role |
 |---|---|
 | [`core/`](product/core/) | Core: mandates, rules, journal, bank adapter |
-| [`mcp-server/`](product/mcp-server/) | MCP server — the entry point for AI agents, forwards calls to the core |
+| [`mcp-server/`](product/mcp-server/) | MCP server — the entry point for software agents, forwards calls to the core |
 | [`client-app/`](product/client-app/) | Client app: connect an agent, set up a mandate, view the journal |
 
 **`developers/` — for third-party developers**
@@ -46,7 +46,57 @@ The target is B2B supplier payments from the client's existing bank account, thr
 | [`bank-sandbox/`](demo/bank-sandbox/) | Minimal HTTP bank sandbox: account balances and payments; a real bank adapter comes later |
 | [`shop/`](demo/shop/) | Planned test online shop for card payments (after MVP) |
 
-## Run locally
+## Run with Docker Compose
+
+Requires Docker Engine with Compose v2 or newer, or Docker Desktop in Linux container mode.
+From the repository root:
+
+```bash
+docker compose up --build -d --wait
+```
+
+Open [the client app](http://localhost:8088). The same address serves:
+
+| Path | Service |
+|---|---|
+| `/` | Built client app |
+| `/api/` | Client API |
+| `/core/docs` | Core API reference |
+| `/bank/docs` | Bank sandbox API reference |
+| `/mcp` | MCP Streamable HTTP |
+
+Create an agent and copy its key in the app. Connect an MCP client to
+`http://localhost:8088/mcp` with the header `Authorization: Bearer sgk_...`.
+Each HTTP request uses its own agent key; no key is baked into an image or Compose configuration.
+For a stdio-only MCP client, use this command from the repository root (the stack must be running):
+
+```bash
+docker compose run --rm --no-deps -T -e SYNGRAPH_AGENT_KEY mcp python product/mcp-server/src/server.py
+```
+
+Set `SYNGRAPH_AGENT_KEY` in the calling process's environment for stdio. HTTP tools always use
+the request's bearer key, even if that environment variable is present.
+
+Compose starts the bank, core, MCP and web services in readiness order. Only the web port is
+published, on `127.0.0.1`; this is a local demo with virtual money and no client sign-in.
+Set `SYNGRAPH_PORT` in your environment or a root `.env` file to change the default `8088`.
+
+SQLite data lives in two named Docker volumes: `core-data` (shared by core and MCP) and
+`bank-data`. A fresh stack creates its own demo client and bank account; existing local
+`product/core/data/` and `demo/bank-sandbox/data/` files are never imported or mounted.
+The build context excludes secrets, runtime databases, drafts and local dependencies.
+
+```bash
+docker compose ps          # Service status and health
+docker compose logs -f     # Follow service logs
+docker compose down        # Stop; keep both databases
+docker compose up -d --wait # Start again with the saved data
+```
+
+`docker compose down --volumes` permanently deletes both Compose databases. SDK, demo agent,
+shop and the documentation website are placeholders and have no runtime service yet.
+
+## Run locally without Docker
 
 Requires Python 3.11 or newer, uv, and Node.js 18 or newer with npm.
 

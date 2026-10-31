@@ -7,7 +7,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 ROOT = Path(__file__).resolve().parents[2]
 DB = ROOT / "data" / "syngraph.db"
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS mandates (
     any_time            INTEGER NOT NULL DEFAULT 0,       -- 1: no working hours, the agent may pay at any time
     any_amount          INTEGER NOT NULL DEFAULT 0        -- 1: no amount limits, the stored ones are kept
 );
-CREATE TABLE IF NOT EXISTS agents (  -- a client's AI agent; each has its own mandate and its own key
+CREATE TABLE IF NOT EXISTS agents (  -- a client's software agent; each has its own mandate and its own key
     id          INTEGER PRIMARY KEY,
     client_id   INTEGER NOT NULL REFERENCES clients(id),
     mandate_id  INTEGER NOT NULL UNIQUE REFERENCES mandates(id),
@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     currency        TEXT    NOT NULL,
     category        TEXT,                 -- as the agent stated it; empty in older rows
     status          TEXT    NOT NULL,     -- awaiting | pending | paid | rejected | unknown (the bank did not answer)
+    approval_state  TEXT,                 -- not_requested | awaiting | approved | declined; NULL: legacy origin unknown
     reason          TEXT,                 -- why rejected or unknown
     created_at      TEXT    NOT NULL      -- UTC, "2026-10-21T14:52:43Z"
 );
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 
 Status = Literal["awaiting", "pending", "paid", "rejected", "unknown"]  # awaiting: the client approves or declines
+ApprovalState = Literal["not_requested", "awaiting", "approved", "declined"]
 
 
 class Transaction(TypedDict):
@@ -93,6 +95,7 @@ class Transaction(TypedDict):
     currency: str
     category: str | None
     status: Status
+    approval_state: NotRequired[ApprovalState | None]
     reason: str | None
     created_at: str
 
@@ -124,9 +127,32 @@ ADDED_COLUMNS = {
         "any_time": "INTEGER NOT NULL DEFAULT 0",
         "any_amount": "INTEGER NOT NULL DEFAULT 0",
     },
-    "transactions": {"category": "TEXT"},
+    "transactions": {"category": "TEXT", "approval_state": "TEXT"},
     "agents": {"icon": "TEXT NOT NULL DEFAULT 'invoice'", "deleted_at": "TEXT"},
 }
+# Preserve approval provenance for already-running writers that do not know the new column.
+APPROVAL_TRIGGERS = (
+    """CREATE TRIGGER IF NOT EXISTS transactions_approval_insert
+    AFTER INSERT ON transactions
+    WHEN NEW.approval_state IS NULL AND NEW.bank_id IS NULL
+      AND (NEW.status IN ('pending', 'awaiting')
+           OR (NEW.status = 'rejected' AND COALESCE(NEW.reason, '') NOT IN
+               ('declined by the client', 'the agent was deleted')))
+    BEGIN
+        UPDATE transactions SET approval_state =
+            CASE WHEN NEW.status = 'awaiting' THEN 'awaiting' ELSE 'not_requested' END
+        WHERE id = NEW.id;
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS transactions_approval_decision
+    AFTER UPDATE OF status ON transactions
+    WHEN OLD.status = 'awaiting' AND NEW.status IN ('pending', 'rejected')
+      AND (NEW.approval_state IS NULL OR NEW.approval_state = 'awaiting')
+    BEGIN
+        UPDATE transactions SET approval_state =
+            CASE WHEN NEW.status = 'pending' THEN 'approved' ELSE 'declined' END
+        WHERE id = NEW.id;
+    END""",
+)
 DEFAULT_AGENT_NAME = "Invoice agent"
 # Pictures the app can draw for an agent.
 AGENT_ICONS = ["invoice", "cart", "plane", "truck", "briefcase", "building", "card", "bank"]
@@ -205,6 +231,8 @@ def create_tables_and_demo_client(conn: sqlite3.Connection) -> None:
         for column, definition in columns.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    for statement in APPROVAL_TRIGGERS:
+        conn.execute(statement)
     for mandate in conn.execute(  # an older database had mandates without agents
         "SELECT id, client_id FROM mandates WHERE id NOT IN (SELECT mandate_id FROM agents)"
     ).fetchall():
@@ -387,11 +415,18 @@ def spent_since(conn: sqlite3.Connection, mandate_id: int, since_utc: str) -> in
 def insert_transaction(conn: sqlite3.Connection, transaction: Transaction) -> None:
     conn.execute(
         "INSERT INTO transactions (id, mandate_id, counterparty_id, payee, payee_inn, bank_id,"
-        " amount_kopecks, currency, category, status, reason, created_at)"
+        " amount_kopecks, currency, category, status, approval_state, reason, created_at)"
         " VALUES (:id, :mandate_id, :counterparty_id, :payee, :payee_inn, :bank_id,"
-        " :amount_kopecks, :currency, :category, :status, :reason, :created_at)",
-        transaction,
+        " :amount_kopecks, :currency, :category, :status, :approval_state, :reason, :created_at)",
+        {"approval_state": None, **transaction},
     )
+
+
+def set_approval_decision(
+    conn: sqlite3.Connection, transaction_id: str, decision: Literal["approved", "declined"]
+) -> None:
+    """Records the decision in the caller's transaction, before any bank call."""
+    conn.execute("UPDATE transactions SET approval_state = ? WHERE id = ?", (decision, transaction_id))
 
 
 def update_transaction_status(conn: sqlite3.Connection, transaction: Transaction) -> None:
@@ -422,6 +457,17 @@ def find_mandate_transaction(conn: sqlite3.Connection, mandate_id: int, transact
     ).fetchone()
 
 
+def mandate_transactions(
+    conn: sqlite3.Connection, mandate_id: int, limit: int, status: str | None = None, payee_inn: str | None = None
+) -> list[sqlite3.Row]:
+    """The mandate's latest operations, newest first; only one status or one payee when given."""
+    return conn.execute(
+        f"{TRANSACTION_SELECT} WHERE t.mandate_id = ? AND (? IS NULL OR t.status = ?)"
+        " AND (? IS NULL OR t.payee_inn = ?) ORDER BY t.created_at DESC, t.id DESC LIMIT ?",
+        (mandate_id, status, status, payee_inn, payee_inn, limit),
+    ).fetchall()
+
+
 def client_transactions(
     conn: sqlite3.Connection, client_id: int, limit: int, agent_id: int | None = None
 ) -> list[sqlite3.Row]:
@@ -432,9 +478,9 @@ def client_transactions(
     ).fetchall()
 
 
-def paid_agent_transactions(conn: sqlite3.Connection, client_id: int, agent_id: int) -> sqlite3.Cursor:
-    """Streams every paid operation of this client's agent, without a feed limit."""
+def agent_transactions(conn: sqlite3.Connection, client_id: int, agent_id: int) -> sqlite3.Cursor:
+    """Streams every operation of this client's agent, without a feed limit."""
     return conn.execute(
-        f"{TRANSACTION_SELECT} WHERE a.client_id = ? AND a.id = ? AND t.status = 'paid'",
+        f"{TRANSACTION_SELECT} WHERE a.client_id = ? AND a.id = ?",
         (client_id, agent_id),
     )

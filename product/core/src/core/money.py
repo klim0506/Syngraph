@@ -20,6 +20,11 @@ def to_kopecks(amount: str) -> int:
     return int(value * 100)
 
 
+def to_rubles(kopecks: int) -> str:
+    """24500000 -> '245000.00': the format to_kopecks reads."""
+    return f"{kopecks // 100}.{kopecks % 100:02d}"
+
+
 def format_money(kopecks: int) -> str:
     """24500000 -> '245000.00 RUB'."""
-    return f"{kopecks // 100}.{kopecks % 100:02d} {CURRENCY}"
+    return f"{to_rubles(kopecks)} {CURRENCY}"

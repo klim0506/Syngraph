@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Operation, when } from "../api";
 import { useT } from "../i18n";
 import { EmptyIllustration } from "../icons";
+import { usePhoneBack } from "../PhoneNavigation";
 import OperationRow from "./OperationRow";
 
 type Status = "all" | "awaiting" | "paid" | "rejected" | "unknown";
@@ -30,12 +31,13 @@ function searchText(o: Operation, locale: string): string {
 }
 
 type Props = {
+  focusedOperation?: Operation | null;
   operations: Operation[]; // one agent's
   onChanged: () => void;
 };
 
 /** An agent's payments: a search over everything, the period and status behind the filter button. */
-export default function History({ operations, onChanged }: Props) {
+export default function History({ operations, onChanged, focusedOperation }: Props) {
   const t = useT();
   const [status, setStatus] = useState<Status>("all");
   const [query, setQuery] = useState("");
@@ -43,9 +45,12 @@ export default function History({ operations, onChanged }: Props) {
   const [open, setOpen] = useState(false); // the filter pop-up
   const box = useRef<HTMLDivElement>(null);
 
+  usePhoneBack(open, () => setOpen(false), "popover");
+
   useEffect(() => {
     if (!open) return;
     const close = (e: Event) => {
+      if (e.target instanceof Element && e.target.closest(".phone-navigation")) return;
       if (e instanceof KeyboardEvent ? e.key === "Escape" : !box.current?.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener("pointerdown", close);
@@ -65,12 +70,22 @@ export default function History({ operations, onChanged }: Props) {
     .replace(/(\d{3,})\.\d*/g, "$1") // "29.10" stays a date
     .split(/\s+/)
     .filter(Boolean);
-  const filtered = operations.filter((o) => {
+  const available = focusedOperation && !operations.some((operation) => operation.id === focusedOperation.id)
+    ? [focusedOperation, ...operations] : operations;
+  const filtered = available.filter((o) => {
     if (since && new Date(o.created_at) < since) return false;
     const text = searchText(o, t.locale);
     return words.every((w) => text.includes(w));
   });
   const shown = status === "all" ? filtered : filtered.filter((o) => o.status === status);
+  const days: { key: string; date: Date; operations: Operation[] }[] = [];
+  for (const operation of [...shown].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))) {
+    const date = new Date(operation.created_at);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const last = days[days.length - 1];
+    if (last?.key === key) last.operations.push(operation);
+    else days.push({ key, date, operations: [operation] });
+  }
   const active = period !== "all" || status !== "all";
 
   return (
@@ -116,11 +131,14 @@ export default function History({ operations, onChanged }: Props) {
           <p className="muted">{operations.length === 0 ? t.nothingHere : t.noMatches}</p>
         </div>
       ) : (
-        <ul className="ops card">
-          {shown.map((o) => (
-            <OperationRow key={o.id} operation={o} onChanged={onChanged} />
-          ))}
-        </ul>
+        <div className="operation-days">
+          {days.map((day) => <section className="operation-day" key={day.key} aria-labelledby={`operations-date-${day.key}`}>
+            <h2 className="operation-date" id={`operations-date-${day.key}`}><time dateTime={day.key}>{day.date.toLocaleDateString(t.locale, { day: "numeric", month: "long", ...(day.date.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) })}</time></h2>
+            <ul className="ops card">
+              {day.operations.map((o) => <OperationRow key={o.id} operation={o} onChanged={onChanged} initiallyOpen={o.id === focusedOperation?.id} />)}
+            </ul>
+          </section>)}
+        </div>
       )}
     </>
   );

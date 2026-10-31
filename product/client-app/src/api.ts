@@ -72,7 +72,7 @@ export type Operation = {
   reason: string | null;
 };
 
-export type StatisticsPeriod = "day" | "week" | "month";
+export type StatisticsPeriod = "today" | "day" | "week" | "month";
 export type AgentStatistics = {
   period: StatisticsPeriod | null;
   timezone: string;
@@ -81,8 +81,12 @@ export type AgentStatistics = {
   days: { date: string; amount_kopecks: number; count: number }[];
   month: { date: string; amount_kopecks: number; count: number }[];
   hours: { hour: number; amount_kopecks: number; count: number }[];
+  rolling_hours: { start: string; end: string; amount_kopecks: number; count: number }[];
   categories: { category: Category | null; amount_kopecks: number; count: number }[];
   largest: Operation[];
+  operations_count: number;
+  success_rate: number | null;
+  flows: { allowed: number; rejected: number; cancelled: number; approved: number; awaiting: number; unknown: number };
 };
 
 export type Counterparty = { inn: string; name: string };

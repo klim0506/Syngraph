@@ -1,17 +1,21 @@
 """Paying an invoice: find the agent by its key -> check its mandate -> record the transaction
--> send to the bank -> update its status. A payment outside the rules waits for the client's decision."""
+-> send to the bank -> update its status. A payment outside the rules waits for the client's decision.
+
+The agent also reads what is its own: its mandate, its operations and how much it may pay now."""
 import re
 import sqlite3
 from datetime import datetime, timezone
-from typing import NotRequired, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast, get_args
 
 from uuid6 import uuid7
 
 from . import bank, db, keys, rules
 from .errors import BankUnconfirmed, InvalidRequest, UnknownAgent
-from .money import CURRENCY, to_kopecks
+from .money import CURRENCY, to_kopecks, to_rubles
 
 MAX_PAYEE = 160  # the payee field of a Russian payment order holds 160 characters
+MAX_LIST = 100  # operations in one list_payments answer
+LIMITS = ["payment", "day", "week", "month"]
 UNCONFIRMED = (
     "the bank did not confirm the payment: it may have gone through, do not pay again, check the operation status"
 )
@@ -24,6 +28,42 @@ class PaymentResult(TypedDict):
     status: db.Status
     payee: str  # the name sent to the bank
     reason: NotRequired[str]  # why rejected, unknown or awaiting the client
+
+
+class Payment(PaymentResult):
+    """One of the agent's operations; amounts are rubles, like "245000.00"."""
+    created_at: str  # UTC, "2026-10-21T14:52:43Z"
+    payee_inn: str
+    amount: str
+    category: str | None  # empty in older operations
+
+
+# Days "mon" ... "sun", hours "09:00" in the mandate's time zone. "from" is a keyword: no class syntax.
+WorkingHours = TypedDict("WorkingHours", {"days": list[str], "from": str, "to": str})
+
+
+class Payee(TypedDict):
+    inn: str
+    name: str
+
+
+class Mandate(TypedDict):
+    """What the client allows the agent; amounts are rubles, like "245000.00". An absent field: no such rule."""
+    paused: bool  # every payment is rejected
+    approval: Literal["auto", "manual"]  # manual: the client approves every payment
+    timezone: str
+    working_hours: NotRequired[WorkingHours]
+    working_now: bool
+    payees: NotRequired[list[Payee]]
+    allowed_categories: NotRequired[list[str]]
+    blocked_categories: NotRequired[list[str]]
+    limits: NotRequired[dict[str, str | None]]  # per payment, day, week, month; None: no limit for the period
+    spent: dict[str, str]  # this day, week, month: paid, plus sent and not confirmed
+
+
+class Available(TypedDict):
+    available: str  # rubles, like "245000.00"
+    limited_by: Literal["paused", "payment", "day", "week", "month", "balance"]
 
 
 def pay(agent_key: str, payee: str, payee_inn: str, amount: str, category: str) -> PaymentResult:
@@ -57,6 +97,7 @@ def pay(agent_key: str, payee: str, payee_inn: str, amount: str, category: str) 
         }
         verdict, transaction["reason"] = rules.check(conn, mandate, counterparty["id"], payee_inn, category, kopecks, now)
         transaction["status"] = {"pass": "pending", "ask": "awaiting", "reject": "rejected"}[verdict]
+        transaction["approval_state"] = "awaiting" if verdict == "ask" else "not_requested"
         db.insert_transaction(conn, transaction)
         conn.commit()  # saved before the bank is called, so a lost answer leaves a trace
 
@@ -80,6 +121,8 @@ def decide(client_id: int, operation_id: str, approve: bool) -> db.Transaction:
         if row["status"] != "awaiting":
             raise InvalidRequest(f"operation {operation_id} is not awaiting approval, it is {row['status']}")
         transaction = cast(db.Transaction, {k: row[k] for k in db.Transaction.__annotations__})
+        transaction["approval_state"] = "approved" if approve else "declined"
+        db.set_approval_decision(conn, operation_id, transaction["approval_state"])
         transaction["status"], transaction["reason"] = ("pending", None) if approve else ("rejected", DECLINED)
         db.update_transaction_status(conn, transaction)
         conn.commit()  # recorded before the bank is called, as in pay()
@@ -120,6 +163,103 @@ def get_status(agent_key: str, operation_id: str) -> PaymentResult:
         return to_result(refresh(conn, row))
     finally:
         conn.close()
+
+
+def get_mandate(agent_key: str) -> Mandate:
+    """The agent's own rules, as the client set them, with what it has spent in each period."""
+    conn = db.connect()
+    try:
+        db.create_tables_and_demo_client(conn)
+        conn.commit()
+        mandate = agent_by_key(conn, agent_key)
+        now = datetime.now(timezone.utc)
+        result: Mandate = {
+            "paused": bool(mandate["paused"]),
+            "approval": mandate["approval"],
+            "timezone": mandate["timezone"],
+            "working_now": rules.is_working_time(mandate, now),
+            "spent": {name: to_rubles(k) for name, k in rules.spent_by_period(conn, mandate, now).items()},
+        }
+        if not mandate["any_time"]:
+            result["working_hours"] = {
+                "days": mandate["working_days"].split(","),
+                "from": mandate["working_from"],
+                "to": mandate["working_to"],
+            }
+        if not mandate["any_counterparty"]:
+            result["payees"] = [
+                {"inn": row["inn"], "name": row["name"]}
+                for row in db.mandate_counterparties(conn, mandate["id"]) if row["allowed"]
+            ]
+        if mandate["category_mode"] == "only":
+            result["allowed_categories"] = [c for c in mandate["allowed_categories"].split(",") if c]
+        elif mandate["category_mode"] == "except":
+            result["blocked_categories"] = [c for c in mandate["blocked_categories"].split(",") if c]
+        if not mandate["any_amount"]:
+            result["limits"] = {
+                name: None if mandate[f"max_{name}_kopecks"] is None else to_rubles(mandate[f"max_{name}_kopecks"])
+                for name in LIMITS
+            }
+        return result
+    finally:
+        conn.close()
+
+
+def list_payments(
+    agent_key: str, status: str | None = None, payee_inn: str | None = None, limit: int = 20
+) -> list[Payment]:
+    """The agent's own operations, newest first, as stored: an unknown one is not asked from the bank here."""
+    if status is not None and status not in get_args(db.Status):
+        raise InvalidRequest(f"status must be one of {get_args(db.Status)}, got {status!r}")
+    if not 1 <= limit <= MAX_LIST:
+        raise InvalidRequest(f"limit must be 1 to {MAX_LIST}, got {limit}")
+    conn = db.connect()
+    try:
+        db.create_tables_and_demo_client(conn)
+        conn.commit()
+        mandate = agent_by_key(conn, agent_key)
+        rows = db.mandate_transactions(conn, mandate["id"], limit, status, payee_inn)
+    finally:
+        conn.close()
+    payments: list[Payment] = []
+    for row in rows:
+        payment: Payment = {
+            "id": row["id"],
+            "created_at": row["created_at"],
+            "payee": row["payee"],
+            "payee_inn": row["payee_inn"],
+            "amount": to_rubles(row["amount_kopecks"]),
+            "category": row["category"],
+            "status": row["status"],
+        }
+        if row["reason"]:
+            payment["reason"] = row["reason"]
+        payments.append(payment)
+    return payments
+
+
+def get_available_balance(agent_key: str) -> Available:
+    """The largest payment that fits the agent's amount limits and the client's account balance now."""
+    conn = db.connect()
+    try:
+        db.create_tables_and_demo_client(conn)
+        conn.commit()
+        mandate = agent_by_key(conn, agent_key)
+        if mandate["paused"]:
+            return {"available": to_rubles(0), "limited_by": "paused"}
+        room: dict[str, int] = {}
+        if not mandate["any_amount"]:
+            room["payment"] = mandate["max_payment_kopecks"]
+            for name, spent in rules.spent_by_period(conn, mandate, datetime.now(timezone.utc)).items():
+                limit = mandate[f"max_{name}_kopecks"]
+                if limit is not None:
+                    room[name] = max(limit - spent, 0)
+        client_id = mandate["client_id"]
+    finally:
+        conn.close()
+    room["balance"] = max(bank.get_balance(client_id), 0)  # the client's account has the client's id
+    limited_by = min(room, key=room.__getitem__)  # on a tie the first: limits before the balance
+    return {"available": to_rubles(room[limited_by]), "limited_by": limited_by}
 
 
 def agent_by_key(conn: sqlite3.Connection, agent_key: str) -> sqlite3.Row:

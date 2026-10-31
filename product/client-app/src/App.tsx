@@ -2,6 +2,7 @@ import { UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Agent, getAgents, getOperations, Operation, rub } from "./api";
 import { I18n, initialLang, Lang, LANGUAGES, saveLang } from "./i18n";
+import PhoneNavigation, { canNavigatePhone, dismissPhonePanel } from "./PhoneNavigation";
 import AgentScreen, { Section } from "./screens/Agent";
 import Agents from "./screens/Agents";
 import NewAgent from "./screens/NewAgent";
@@ -9,6 +10,9 @@ import Settings from "./screens/Settings";
 import { applyTheme, initialTheme, Theme } from "./theme";
 
 type View = "agents" | "settings"; // settings open from the profile button
+type Route = { view: View; agentId: number | null; section?: Section; creating: boolean };
+const HOME: Route = { view: "agents", agentId: null, creating: false };
+const routeKey = (route: Route) => `${route.view}-${route.agentId ?? ""}-${route.section ?? ""}-${route.creating}`;
 
 const REFRESH_MS = 3000; // payments made by agents through MCP show up on their own
 const TOAST_MS = 5000;
@@ -16,10 +20,11 @@ const TOAST_MS = 5000;
 export default function App() {
   const [lang, setLang] = useState<Lang>(initialLang);
   const [theme, setTheme] = useState<Theme>(initialTheme);
-  const [view, setView] = useState<View>("agents");
-  const [agentId, setAgentId] = useState<number | null>(null); // the open agent
-  const [section, setSection] = useState<Section | undefined>(); // what the open agent shows first
-  const [creating, setCreating] = useState(false); // creating a new agent
+  const [route, setRoute] = useState<Route>(HOME);
+  const { view, agentId, section, creating } = route;
+  const history = useRef<Route[]>([]);
+  const [recent, setRecent] = useState<Route[]>([HOME]);
+  const [recentsOpen, setRecentsOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[] | null>(null);
   const [operations, setOperations] = useState<Operation[] | null>(null);
   const [offline, setOffline] = useState(false);
@@ -94,19 +99,45 @@ export default function App() {
   const removeAgent = (id: number) => {
     agentRevision.current += 1;
     setAgents((list) => list && list.filter((a) => a.id !== id));
-    setAgentId(null);
-    setCreating(false);
+    history.current = history.current.filter((item) => item.agentId !== id);
+    setRecent((items) => items.filter((item) => item.agentId !== id));
+    setRoute(HOME);
   };
 
   const toast = toastId ? operations?.find((o) => o.id === toastId) : undefined;
   const openAgent = agentId !== null ? agents?.find((a) => a.id === agentId) : undefined;
 
-  function open(next: View, agent: number | null = null, first?: Section) {
-    setView(next);
-    setAgentId(agent);
-    setSection(first);
-    setCreating(false);
+  function navigate(next: Route, remember = true) {
+    if (remember && routeKey(next) !== routeKey(route)) history.current = [...history.current, route].slice(-30);
+    setRoute(next);
+    setRecentsOpen(false);
+    if (!next.creating) setRecent((items) => [next, ...items.filter((item) => routeKey(item) !== routeKey(next))].slice(0, 8));
   }
+
+  function open(next: View, agent: number | null = null, first?: Section) {
+    navigate({ view: next, agentId: agent, section: agent === null ? undefined : first ?? (agents?.find((a) => a.id === agent)?.has_key ? "statistics" : "limits"), creating: false });
+  }
+
+  function back() {
+    if (!canNavigatePhone()) return;
+    if (recentsOpen) { setRecentsOpen(false); return; }
+    if (dismissPhonePanel()) return;
+    let previous = history.current.pop();
+    while (previous && (previous.creating || (previous.agentId !== null && !agents?.some((a) => a.id === previous!.agentId)))) previous = history.current.pop();
+    navigate(previous ?? HOME, false);
+  }
+
+  const toggleRecents = useCallback(() => {
+    if (!canNavigatePhone()) return;
+    setRecentsOpen((value) => !value);
+  }, []);
+
+  const recentScreens = recent.filter((item) => item.agentId === null || agents?.some((a) => a.id === item.agentId)).map((item) => ({
+    id: routeKey(item),
+    title: item.view === "settings" ? t.tabs.settings : item.agentId === null ? t.tabs.agents : `${agents?.find((a) => a.id === item.agentId)?.name} · ${t.sections[item.section ?? "statistics"]}`,
+    current: routeKey(item) === routeKey(route),
+    onOpen: () => { if (canNavigatePhone()) navigate(item); },
+  }));
 
   const screen =
     !agents || !operations ? (
@@ -116,19 +147,20 @@ export default function App() {
     ) : creating ? (
       <NewAgent
         onCreated={updateAgent}
-        onDone={(a) => { updateAgent(a); setCreating(false); setAgentId(a.id); }}
+        onDone={(a) => { updateAgent(a); open("agents", a.id, "statistics"); }}
       />
     ) : openAgent ? (
       <AgentScreen
         agent={openAgent}
         section={section}
+        onSection={(next) => navigate({ ...route, section: next })}
         operations={operations.filter((o) => o.agent_id === openAgent.id)}
         onAgent={updateAgent}
         onDeleted={() => removeAgent(openAgent.id)}
         onChanged={refresh}
       />
     ) : (
-      <Agents agents={agents} operations={operations} onOpen={(id) => open("agents", id)} onNew={() => setCreating(true)} />
+      <Agents agents={agents} operations={operations} onOpen={(id) => open("agents", id)} onNew={() => navigate({ ...HOME, creating: true })} />
     );
 
   return (
@@ -137,9 +169,6 @@ export default function App() {
         <div className={`phone${openAgent && view === "agents" && !creating ? " agent-open" : ""}`}>
           <header className="appbar">
             <button type="button" className="home" onClick={() => open("agents")} aria-label={t.tabs.agents}>
-              <span className="logo" aria-hidden>
-                S
-              </span>
               <span className="brand">Syngraph</span>
             </button>
             <button
@@ -156,7 +185,7 @@ export default function App() {
 
           {offline && agents && <div className="banner">{t.reconnecting}</div>}
 
-          <main className={`screen${openAgent && view === "agents" && !creating ? " screen-agent" : ""}`} key={`${view}-${agentId ?? ""}-${section ?? ""}-${creating}` /* each screen opens at the top */}>
+          <main className={`screen${openAgent && view === "agents" && !creating ? " screen-agent" : ""}`} key={`${view}-${agentId ?? ""}-${creating}` /* each screen opens at the top */}>
             {screen}
           </main>
 
@@ -168,6 +197,7 @@ export default function App() {
               </span>
             </button>
           )}
+          <PhoneNavigation recent={recentScreens} expanded={recentsOpen} onRecents={toggleRecents} onHome={() => { if (canNavigatePhone()) open("agents"); }} onBack={back} />
         </div>
       </div>
     </I18n.Provider>

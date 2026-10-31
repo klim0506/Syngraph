@@ -37,7 +37,7 @@ export default function Agents({ agents, operations, onOpen, onNew }: Props) {
 
       {agents.length === 0 && (
         <div className="agents-empty">
-          <EmptyIllustration kind="agents" />
+          <EmptyIllustration kind="agents" onAction={onNew} />
           <p className="muted">{t.noAgents}</p>
           <button type="button" className="btn-primary" onClick={onNew}>
             {t.connectAgent}
