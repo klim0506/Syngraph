@@ -110,6 +110,23 @@ h2 { font: var(--text); color: var(--muted); margin: 22px 0 8px; }
 .profile { width: 36px; height: 36px; flex: none; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
   color: var(--on-navy); background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .2); }
 .profile:hover, .profile[aria-pressed="true"] { background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .45); }
+.appbar-actions { display: flex; align-items: center; gap: 10px; }
+.notification-bell { position: relative; }
+.notification-count { position: absolute; top: -5px; inset-inline-end: -6px; min-width: 18px; padding: 1px 4px; border: 2px solid var(--navy); border-radius: 10px; color: #fff; background: var(--blue); font: 600 10px/1.3 var(--font); }
+.notification-warning { position: absolute; top: 1px; inset-inline-end: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+.notification-heading { flex-wrap: wrap; }
+.notification-heading .link { padding-block: 6px; }
+.card.notification-list { list-style: none; margin: 0; padding: 0; overflow: hidden; }
+.notification-list > li + li { border-top: 1px solid var(--line); }
+.notification-item { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 14px 16px; border: 0; background: none; text-align: start; cursor: pointer; }
+.notification-item.unread { background: var(--blue-soft); }
+.notification-item:hover { background: var(--page); }
+.notification-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.notification-item:disabled { cursor: wait; }
+.notification-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; width: 100%; }
+.notification-agent { display: flex; align-items: center; gap: 7px; min-width: 0; overflow-wrap: anywhere; font: var(--text-strong); }
+.notification-unread { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--blue); }
+.notification-payee { overflow-wrap: anywhere; }
 .banner { flex: none; text-align: center; padding: 4px; background: var(--card); color: var(--muted); }
 .screen { flex: 1; overflow-y: auto; padding: 18px 18px 24px; scrollbar-width: none; }
 .screen-agent { padding: 0; min-height: 0; overflow: hidden; }
@@ -310,6 +327,18 @@ form > .muted + .card { margin-top: 4px; }
 .btn-danger:disabled { opacity: .45; cursor: default; }
 
 /* Settings rows */
+.bank-heading, .bank-row, .bank-actions { display: flex; align-items: center; gap: 10px; }
+.bank-heading .notice { margin: 1px 0 0; color: var(--muted); }
+.bank-icon { width: 38px; height: 38px; }
+.bank-field { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.bank-row { justify-content: space-between; border-top: 1px solid var(--line); padding-block: 10px; }
+.bank-row button { flex: none; }
+.bank-accounts ul { list-style: none; padding: 0; margin: 6px 0 0; }
+.bank-accounts .bank-row:last-child { padding-block-end: 0; }
+.bank-actions { flex-wrap: wrap; }
+.bank-actions .link { min-height: 38px; }
+.bank-setup { align-self: start; min-height: 32px; }
+.bank-confirm { padding: 10px 0; border-top: 1px solid var(--line); }
 .setting { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
 .settings-card { padding: 4px 16px; }
 .srow { display: flex; align-items: center; gap: 12px; padding: 12px 0; }

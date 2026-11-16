@@ -48,6 +48,17 @@ The journal stores nullable `approval_state` separately from bank status and rea
 
 No sign-in for people yet: anyone who reaches the API can change any client's agents, so it listens on 127.0.0.1 only (uvicorn's default; never `--host 0.0.0.0`).
 
+## In-app notifications
+
+The bell uses a durable SQLite event feed, independent of the latest operations page. Transaction inserts and actual status changes create notification snapshots in the same database transaction, including writes from the MCP process while the app is closed. Each event preserves the operation, agent name, payee, amount, currency, status and event time; later status changes do not rewrite it. Repeating an unchanged status creates no event. Read state is stored per client and survives reloads.
+
+- `GET /api/clients/{id}/notifications?limit=100` returns `{items, unread_count}`. Each item has `id`, `operation_id`, `agent_id`, `agent_name`, `payee`, `amount_kopecks`, `currency`, `status`, `created_at` and nullable `read_at`. Items sort by descending notification id; `limit` must be 1–200. The unread count covers the entire visible feed, not just the returned items, and is read from the same database snapshot.
+- `POST /api/clients/{id}/notifications/{notification_id}/read` marks one owned notification read and returns 204. Repeated calls keep its original read time; an unavailable or other client's event returns 404.
+- `POST /api/clients/{id}/notifications/read-all` takes `{"through_id": 123}` and returns 204. Only this client's notifications at or before that displayed id become read; newer events stay unread. The cutoff must be a nonnegative integer.
+- `GET /api/clients/{id}/operations/{operation_id}` reads the current stored operation for a notification link, including operations older than the latest feed page. It does not call the bank. A missing operation, other client's operation or deleted agent returns 404.
+
+Deleted agents' events remain stored but are hidden from the feed and unread count. On the first upgrade, only existing `awaiting` operations of active agents are added; old payment history does not flood the bell. Table creation, this backfill and event triggers are installed atomically; repeated initialization does not duplicate events. Notifications do not approve, retry or send payments, and make no external notification calls. There are no phone or Telegram notifications in this implementation.
+
 Code: `api.py` (HTTP API), `payments.py` (pay an invoice; the agent's mandate, operations and available amount), `rules.py` (mandate checks), `db.py` (SQLite), `keys.py` (agent keys), `bank.py` (bank adapter), `money.py` (kopecks), `errors.py` (bad request, unknown agent key, broken mandate, bank not answering, unconfirmed bank payment). Functions in `db.py` never commit; the caller commits explicitly.
 
 - `src/` — code

@@ -72,6 +72,20 @@ export type Operation = {
   reason: string | null;
 };
 
+export type Notification = {
+  id: number;
+  operation_id: string;
+  agent_id: number;
+  agent_name: string;
+  payee: string;
+  amount_kopecks: number;
+  currency: string;
+  status: Status;
+  created_at: string;
+  read_at: string | null;
+};
+export type NotificationList = { items: Notification[]; unread_count: number };
+
 export type StatisticsPeriod = "today" | "day" | "week" | "month";
 export type AgentStatistics = {
   period: StatisticsPeriod | null;
@@ -128,6 +142,12 @@ export const newAgentKey = (id: number) => call<{ key: string; hint: string }>("
 export const deleteAgent = (id: number) => call<void>("DELETE", `${client}/agents/${id}`);
 
 export const getOperations = () => call<Operation[]>("GET", `${client}/operations?limit=100`);
+/** Fetches a specific operation even when it is older than the recent feed. */
+export const getOperation = (id: string) => call<Operation>("GET", `${client}/operations/${encodeURIComponent(id)}`);
+export const getNotifications = () => call<NotificationList>("GET", `${client}/notifications?limit=100`);
+export const readNotification = (id: number) => call<void>("POST", `${client}/notifications/${id}/read`);
+/** Only the displayed snapshot is marked read; later events keep their unread state. */
+export const readAllNotifications = (throughId: number) => call<void>("POST", `${client}/notifications/read-all`, { through_id: throughId });
 /** The person's decision on an awaiting payment; an approved one goes to the bank. */
 export const approveOperation = (id: string) => call<Operation>("POST", `${client}/operations/${id}/approve`);
 export const declineOperation = (id: string) => call<Operation>("POST", `${client}/operations/${id}/decline`);

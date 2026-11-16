@@ -10,9 +10,9 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Literal, TypedDict
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import db, keys, rules
 from .errors import InvalidRequest, MandateMisconfigured
@@ -80,6 +80,28 @@ class Operation(TypedDict):
 class PaymentSummary(TypedDict):
     amount_kopecks: int
     count: int
+
+
+class Notification(TypedDict):
+    id: int
+    operation_id: str
+    agent_id: int
+    agent_name: str
+    payee: str
+    amount_kopecks: int
+    currency: str
+    status: db.Status
+    created_at: str
+    read_at: str | None
+
+
+class NotificationFeed(TypedDict):
+    items: list[Notification]
+    unread_count: int
+
+
+class ReadNotifications(BaseModel):
+    through_id: int = Field(ge=0, strict=True)
 
 
 class PaymentTotal(PaymentSummary):
@@ -503,6 +525,48 @@ def get_operations(client_id: int, agent_id: int | None = None, limit: int = 50)
     with open_db() as conn:
         rows = db.client_transactions(conn, client_id, min(max(limit, 1), MAX_FEED), agent_id)
     return [operation_view(r) for r in rows]
+
+
+@app.get("/api/clients/{client_id}/operations/{operation_id}")
+def get_operation(client_id: int, operation_id: str) -> Operation:
+    """Read a stored operation without checking the bank, including older notification targets."""
+    with open_db() as conn:
+        conn.execute("BEGIN")
+        row = db.find_transaction(conn, client_id, operation_id)
+        if row is None:
+            raise HTTPException(404, f"operation {operation_id!r} not found for client {client_id}")
+        agent_of(conn, client_id, row["agent_id"])
+        return operation_view(row)
+
+
+@app.get("/api/clients/{client_id}/notifications")
+def get_notifications(client_id: int, limit: int = Query(default=100, ge=1, le=MAX_FEED)) -> NotificationFeed:
+    """Read event snapshots and the full unread count from one database snapshot."""
+    with open_db() as conn:
+        conn.execute("BEGIN")
+        rows = db.client_notifications(conn, client_id, limit)
+        return {
+            "items": [{key: row[key] for key in Notification.__annotations__} for row in rows],
+            "unread_count": db.unread_notifications(conn, client_id),
+        }
+
+
+@app.post("/api/clients/{client_id}/notifications/read-all", status_code=204)
+def read_all_notifications(client_id: int, selection: ReadNotifications) -> Response:
+    """Mark only events no newer than the user's displayed cutoff."""
+    with open_db() as conn:
+        db.read_notifications_through(conn, client_id, selection.through_id)
+        conn.commit()
+    return Response(status_code=204)
+
+
+@app.post("/api/clients/{client_id}/notifications/{notification_id}/read", status_code=204)
+def read_one_notification(client_id: int, notification_id: int) -> Response:
+    with open_db() as conn:
+        if not db.read_notification(conn, client_id, notification_id):
+            raise HTTPException(404, f"notification {notification_id} not found for client {client_id}")
+        conn.commit()
+    return Response(status_code=204)
 
 
 @app.post("/api/clients/{client_id}/operations/{operation_id}/check")

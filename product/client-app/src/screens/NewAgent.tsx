@@ -1,10 +1,12 @@
 import { FormEvent, useState } from "react";
 import { addAgent, Agent, AgentIcon, Counterparty, findByInn, newAgentKey } from "../api";
+import { setAgentDemoAccount } from "../demoBank";
 import { serverText, useT } from "../i18n";
 import { usePhoneBack, usePhoneNavigationBlock } from "../PhoneNavigation";
 import { AgentGlyph, ICONS } from "../icons";
 import { FreshKey } from "./AgentSettings";
 import { PayeeList } from "./Counterparties";
+import { DemoAccountPicker } from "./DemoBank";
 import { changeOf, Draft, LimitFields } from "./Limits";
 
 type Step = 1 | 2 | 3;
@@ -34,10 +36,11 @@ export default function NewAgent({ onCreated, onDone }: Props) {
   const [step, setStep] = useState<Step>(1);
   const [name, setName] = useState("");
   const [icon, setIcon] = useState<AgentIcon>("invoice");
+  const [account, setAccount] = useState("");
   const [draft, setDraft] = useState<Draft>(START);
   const [payeesOnly, setPayeesOnly] = useState(false);
   const [payees, setPayees] = useState<Counterparty[]>([]); // kept here until the agent is created
-  const [created, setCreated] = useState<{ agent: Agent; key: string } | null>(null);
+  const [created, setCreated] = useState<{ agent: Agent; key: string | null; accountFailed: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -66,12 +69,13 @@ export default function NewAgent({ onCreated, onDone }: Props) {
     const settings = { ...changeOf(draft), icon, any_counterparty: !payeesOnly };
     try {
       const agent = await addAgent(name.trim(), settings, payeesOnly ? payees : []);
+      const accountFailed = !!account && setAgentDemoAccount(agent.id, account) !== null;
       // without a key the agent still exists: open it, the key is made in its settings
       const fresh = await newAgentKey(agent.id).catch(() => null);
-      if (!fresh) return onDone(agent);
-      const withKey = { ...agent, has_key: true, key_hint: fresh.hint };
-      setCreated({ agent: withKey, key: fresh.key });
-      onCreated(withKey);
+      if (!fresh && !accountFailed) return onDone(agent);
+      const saved = fresh ? { ...agent, has_key: true, key_hint: fresh.hint } : agent;
+      setCreated({ agent: saved, key: fresh?.key ?? null, accountFailed });
+      onCreated(saved);
       setStep(3);
     } catch (err) {
       setError(serverText(t, (err as Error).message));
@@ -89,26 +93,29 @@ export default function NewAgent({ onCreated, onDone }: Props) {
       </div>
 
       {step === 1 && (
-        <form onSubmit={next}>
+        <>
           <h1>{t.newAgent}</h1>
-          <section className="card">
-            <label className="wizard-label" htmlFor="agent-name">
-              {t.agentName}
-            </label>
-            <input id="agent-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t.newAgentPlaceholder} maxLength={80} />
-            <span className="wizard-label">{t.icon}</span>
-            <div className="icon-grid" role="radiogroup" aria-label={t.icon}>
-              {ICONS.map((i) => (
-                <button key={i} type="button" role="radio" aria-checked={icon === i} aria-label={t.iconNames[i]} title={t.iconNames[i]} onClick={() => setIcon(i)}>
-                  <AgentGlyph icon={i} size={22} />
-                </button>
-              ))}
-            </div>
-          </section>
-          <button type="submit" className="btn-primary wizard-next" disabled={!name.trim()}>
+          <form id="new-agent-identity" onSubmit={next}>
+            <section className="card">
+              <label className="wizard-label" htmlFor="agent-name">
+                {t.agentName}
+              </label>
+              <input id="agent-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t.newAgentPlaceholder} maxLength={80} />
+              <span className="wizard-label">{t.icon}</span>
+              <div className="icon-grid" role="radiogroup" aria-label={t.icon}>
+                {ICONS.map((i) => (
+                  <button key={i} type="button" role="radio" aria-checked={icon === i} aria-label={t.iconNames[i]} title={t.iconNames[i]} onClick={() => setIcon(i)}>
+                    <AgentGlyph icon={i} size={22} />
+                  </button>
+                ))}
+              </div>
+            </section>
+          </form>
+          <DemoAccountPicker value={account} onChange={setAccount} />
+          <button type="submit" form="new-agent-identity" className="btn-primary wizard-next" disabled={!name.trim()}>
             {t.next}
           </button>
-        </form>
+        </>
       )}
 
       {step === 2 && (
@@ -137,10 +144,13 @@ export default function NewAgent({ onCreated, onDone }: Props) {
 
       {step === 3 && created && (
         <>
-          <h1>{t.keyTitle}</h1>
-          <section className="card">
-            <FreshKey secret={created.key} next={t.done} onNext={() => onDone(created.agent)} />
-          </section>
+          <h1>{created.key ? t.keyTitle : created.agent.name}</h1>
+          {created.accountFailed && <p className="error" role="alert">{t.bankConnection.assignmentFailed}</p>}
+          {created.key ? (
+            <section className="card">
+              <FreshKey secret={created.key} next={t.done} onNext={() => onDone(created.agent)} />
+            </section>
+          ) : <button type="button" className="btn-primary wizard-next" onClick={() => onDone(created.agent)}>{t.done}</button>}
         </>
       )}
     </>

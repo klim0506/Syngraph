@@ -1,10 +1,12 @@
 import { ArrowLeftRight, LineChart, SlidersHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Agent, changeAgent, Operation } from "../api";
+import { Agent, ApiError, changeAgent, getOperation, Operation } from "../api";
+import { setAgentDemoAccount } from "../demoBank";
 import { serverText, useT } from "../i18n";
 import { usePhoneBack, usePhoneNavigationBlock } from "../PhoneNavigation";
 import { AgentKey, DeleteAgent } from "./AgentSettings";
 import Counterparties from "./Counterparties";
+import { DemoAccountPicker } from "./DemoBank";
 import History from "./History";
 import Limits from "./Limits";
 import Statistics from "./Statistics";
@@ -16,6 +18,7 @@ const SECTION_ICONS = { statistics: LineChart, limits: SlidersHorizontal, histor
 type Props = {
   agent: Agent;
   section?: Section;
+  operationId?: string;
   onSection: (section: Section) => void;
   operations: Operation[]; // this agent's only
   onAgent: (a: Agent) => void;
@@ -23,12 +26,29 @@ type Props = {
   onChanged: () => void;
 };
 
-export default function AgentScreen({ agent, section: current, onSection: setSection, operations, onAgent, onDeleted, onChanged }: Props) {
+export default function AgentScreen({ agent, section: current, operationId, onSection: setSection, operations, onAgent, onDeleted, onChanged }: Props) {
   const t = useT();
   const section = current ?? (agent.has_key ? "statistics" : "limits");
   const panel = useRef<HTMLDivElement>(null);
   const [focusedOperation, setFocusedOperation] = useState<Operation | null>(null);
+  const [operationError, setOperationError] = useState<"missing" | "failed" | null>(null);
+  const [operationLoading, setOperationLoading] = useState(false);
+  const [operationRetry, setOperationRetry] = useState(0);
   useEffect(() => { if (section !== "history") setFocusedOperation(null); }, [section, agent.id]);
+  useEffect(() => {
+    if (!operationId || section !== "history") { setOperationError(null); setOperationLoading(false); return; }
+    let active = true;
+    setFocusedOperation(null);
+    setOperationError(null);
+    setOperationLoading(true);
+    getOperation(operationId).then((operation) => {
+      if (!active) return;
+      if (operation.agent_id === agent.id) setFocusedOperation(operation);
+      else setOperationError("missing");
+    }).catch((e) => { if (active) setOperationError(e instanceof ApiError && e.status === 404 ? "missing" : "failed"); })
+      .finally(() => { if (active) setOperationLoading(false); });
+    return () => { active = false; };
+  }, [operationId, agent.id, section, operationRetry]);
   const [asking, setAsking] = useState(false); // confirming that payments stop or start
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -86,10 +106,15 @@ export default function AgentScreen({ agent, section: current, onSection: setSec
 
       <div ref={panel} className="agent-panel" id="agent-panel" role="tabpanel" aria-labelledby={`agent-tab-${section}`}>
         {section === "statistics" && <Statistics key={agent.id} agentId={agent.id} operations={operations} onOperation={(operation) => { setFocusedOperation(operation); setSection("history"); }} />}
-        {section === "history" && <History operations={operations} onChanged={onChanged} focusedOperation={focusedOperation?.agent_id === agent.id ? focusedOperation : null} />}
+        {section === "history" && <>
+          {operationLoading && <div className="muted" role="status">{t.loading}</div>}
+          {operationError && <div className="stats-error" role="status"><span className="muted">{operationError === "missing" ? t.notifications.unavailable : t.notifications.actionFailed}</span><button type="button" className="link" onClick={() => setOperationRetry((value) => value + 1)}>{t.stats.retry}</button></div>}
+          <History operations={operations} onChanged={() => { onChanged(); if (operationId) setOperationRetry((value) => value + 1); }} focusedOperation={focusedOperation?.agent_id === agent.id ? focusedOperation : null} />
+        </>}
         {section === "limits" && (
           <>
             <AgentKey agent={agent} onChanged={onChanged} />
+            <DemoAccountPicker agentId={agent.id} />
             <Limits agent={agent} onAgent={onAgent} payees={<Counterparties agent={agent} onAgent={onAgent} />} />
             <section className="card agent-payment-control">
               <label className="switch-row">
@@ -97,7 +122,7 @@ export default function AgentScreen({ agent, section: current, onSection: setSec
                 <input type="checkbox" role="switch" className={`pay-switch ${agent.paused ? "off" : "on"}`} checked={!agent.paused} disabled={busy || asking} title={agent.paused ? t.stopped : t.payments} onChange={() => setAsking(true)} />
               </label>
             </section>
-            <DeleteAgent agent={agent} onDeleted={onDeleted} />
+            <DeleteAgent agent={agent} onDeleted={() => { setAgentDemoAccount(agent.id, ""); onDeleted(); }} />
           </>
         )}
       </div>

@@ -15,6 +15,7 @@ export default function OperationRow({ operation: o, onChanged, initiallyOpen = 
   const trigger = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!initiallyOpen) return;
+    setOpen(true);
     const frame = requestAnimationFrame(() => {
       trigger.current?.focus({ preventScroll: true });
       trigger.current?.closest("li")?.scrollIntoView({ block: "nearest" });

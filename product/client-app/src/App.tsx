@@ -1,18 +1,19 @@
-import { UserRound } from "lucide-react";
+import { Bell, UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Agent, getAgents, getOperations, Operation, rub } from "./api";
+import { Agent, ApiError, getAgents, getNotifications, getOperation, getOperations, Notification, NotificationList, Operation, readAllNotifications, readNotification, rub } from "./api";
 import { I18n, initialLang, Lang, LANGUAGES, saveLang } from "./i18n";
 import PhoneNavigation, { canNavigatePhone, dismissPhonePanel } from "./PhoneNavigation";
 import AgentScreen, { Section } from "./screens/Agent";
 import Agents from "./screens/Agents";
 import NewAgent from "./screens/NewAgent";
+import Notifications from "./screens/Notifications";
 import Settings from "./screens/Settings";
 import { applyTheme, initialTheme, Theme } from "./theme";
 
-type View = "agents" | "settings"; // settings open from the profile button
-type Route = { view: View; agentId: number | null; section?: Section; creating: boolean };
+type View = "agents" | "settings" | "notifications";
+type Route = { view: View; agentId: number | null; section?: Section; operationId?: string; creating: boolean };
 const HOME: Route = { view: "agents", agentId: null, creating: false };
-const routeKey = (route: Route) => `${route.view}-${route.agentId ?? ""}-${route.section ?? ""}-${route.creating}`;
+const routeKey = (route: Route) => `${route.view}-${route.agentId ?? ""}-${route.section ?? ""}-${route.operationId ?? ""}-${route.creating}`;
 
 const REFRESH_MS = 3000; // payments made by agents through MCP show up on their own
 const TOAST_MS = 5000;
@@ -27,12 +28,20 @@ export default function App() {
   const [recentsOpen, setRecentsOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[] | null>(null);
   const [operations, setOperations] = useState<Operation[] | null>(null);
+  const [notifications, setNotifications] = useState<NotificationList | null>(null);
+  const [notificationsFailed, setNotificationsFailed] = useState(false);
   const [offline, setOffline] = useState(false);
   const [toastId, setToastId] = useState<string | null>(null); // the newest agent payment, shown with its current status
   const seen = useRef<Set<string> | null>(null); // operation ids already shown; null until the first load
   const refreshing = useRef(false);
   const refreshAgain = useRef(false);
   const agentRevision = useRef(0);
+  const notificationRevision = useRef(0);
+  const notificationMutation = useRef(false);
+  const notificationsRefreshing = useRef(false);
+  const notificationsRefreshAgain = useRef(false);
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
   const t = LANGUAGES[lang];
 
   useEffect(() => {
@@ -42,6 +51,31 @@ export default function App() {
   }, [lang, t.dir]);
 
   useEffect(() => applyTheme(theme), [theme]);
+
+  const refreshNotifications = useCallback(async () => {
+    if (notificationsRefreshing.current) { notificationsRefreshAgain.current = true; return; }
+    notificationsRefreshing.current = true;
+    try {
+      do {
+        notificationsRefreshAgain.current = false;
+        const revision = notificationRevision.current;
+        try {
+          const data = await getNotifications();
+          // A slow poll must never restore the unread state after a read action.
+          if (revision === notificationRevision.current && !notificationMutation.current) {
+            setNotifications(data);
+            setNotificationsFailed(false);
+          }
+        } catch { if (revision === notificationRevision.current) setNotificationsFailed(true); }
+      } while (notificationsRefreshAgain.current);
+    } finally { notificationsRefreshing.current = false; }
+  }, []);
+
+  useEffect(() => {
+    refreshNotifications();
+    const timer = setInterval(refreshNotifications, REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [refreshNotifications]);
 
   const refresh = useCallback(async () => {
     if (refreshing.current) {
@@ -102,6 +136,7 @@ export default function App() {
     history.current = history.current.filter((item) => item.agentId !== id);
     setRecent((items) => items.filter((item) => item.agentId !== id));
     setRoute(HOME);
+    refreshNotifications();
   };
 
   const toast = toastId ? operations?.find((o) => o.id === toastId) : undefined;
@@ -115,7 +150,45 @@ export default function App() {
   }
 
   function open(next: View, agent: number | null = null, first?: Section) {
+    if (!canNavigatePhone()) return;
     navigate({ view: next, agentId: agent, section: agent === null ? undefined : first ?? (agents?.find((a) => a.id === agent)?.has_key ? "statistics" : "limits"), creating: false });
+  }
+
+  async function markRead(throughId?: number, item?: Notification) {
+    notificationMutation.current = true;
+    notificationRevision.current += 1;
+    try {
+      if (item) await readNotification(item.id);
+      else await readAllNotifications(throughId!);
+      setNotifications((current) => {
+        if (!current) return current;
+        let count = 0;
+        const items = current.items.map((entry) => {
+          if (entry.read_at || (item ? entry.id !== item.id : entry.id > throughId!)) return entry;
+          count += 1;
+          return { ...entry, read_at: new Date().toISOString() };
+        });
+        return { items, unread_count: Math.max(0, current.unread_count - count) };
+      });
+    } catch (e) {
+      throw new Error(e instanceof ApiError && e.status === 404 ? t.notifications.unavailable : t.notifications.actionFailed);
+    } finally {
+      notificationRevision.current += 1;
+      notificationMutation.current = false;
+      refreshNotifications();
+    }
+  }
+
+  async function openNotification(item: Notification) {
+    try {
+      const operation = await getOperation(item.operation_id);
+      if (operation.agent_id !== item.agent_id || !agentsRef.current?.some((a) => a.id === item.agent_id)) throw new ApiError(404, "");
+      await markRead(undefined, item);
+      navigate({ view: "agents", agentId: item.agent_id, section: "history", operationId: operation.id, creating: false });
+    } catch (e) {
+      refreshNotifications();
+      throw new Error((e instanceof ApiError && e.status === 404) || (e as Error).message === t.notifications.unavailable ? t.notifications.unavailable : t.notifications.actionFailed);
+    }
   }
 
   function back() {
@@ -134,26 +207,29 @@ export default function App() {
 
   const recentScreens = recent.filter((item) => item.agentId === null || agents?.some((a) => a.id === item.agentId)).map((item) => ({
     id: routeKey(item),
-    title: item.view === "settings" ? t.tabs.settings : item.agentId === null ? t.tabs.agents : `${agents?.find((a) => a.id === item.agentId)?.name} · ${t.sections[item.section ?? "statistics"]}`,
+    title: item.view === "notifications" ? t.notifications.title : item.view === "settings" ? t.tabs.settings : item.agentId === null ? t.tabs.agents : `${agents?.find((a) => a.id === item.agentId)?.name} · ${t.sections[item.section ?? "statistics"]}`,
     current: routeKey(item) === routeKey(route),
     onOpen: () => { if (canNavigatePhone()) navigate(item); },
   }));
 
   const screen =
-    !agents || !operations ? (
+    view === "notifications" ? (
+      <Notifications data={notifications} failed={notificationsFailed} onRetry={refreshNotifications} onReadAll={(id) => markRead(id)} onOpen={openNotification} />
+    ) : !agents || !operations ? (
       <div className="loading">{offline ? t.unreachable : t.loading}</div>
     ) : view === "settings" ? (
       <Settings lang={lang} onLang={setLang} theme={theme} onTheme={setTheme} />
     ) : creating ? (
       <NewAgent
         onCreated={updateAgent}
-        onDone={(a) => { updateAgent(a); open("agents", a.id, "statistics"); }}
+        onDone={(a) => { updateAgent(a); navigate({ ...HOME, agentId: a.id, section: "statistics" }); }}
       />
     ) : openAgent ? (
       <AgentScreen
         agent={openAgent}
         section={section}
-        onSection={(next) => navigate({ ...route, section: next })}
+        operationId={route.operationId}
+        onSection={(next) => navigate({ ...route, section: next, operationId: undefined })}
         operations={operations.filter((o) => o.agent_id === openAgent.id)}
         onAgent={updateAgent}
         onDeleted={() => removeAgent(openAgent.id)}
@@ -171,6 +247,12 @@ export default function App() {
             <button type="button" className="home" onClick={() => open("agents")} aria-label={t.tabs.agents}>
               <span className="brand">Syngraph</span>
             </button>
+            <div className="appbar-actions">
+            <button type="button" className="profile notification-bell" aria-pressed={view === "notifications"} aria-label={notificationsFailed ? t.notifications.bellFailed : t.notifications.bell(notifications?.unread_count ?? 0)} title={t.notifications.title} onClick={() => open(view === "notifications" ? "agents" : "notifications")}>
+              <Bell size={18} strokeWidth={1.75} aria-hidden />
+              {!!notifications?.unread_count && <span className="notification-count" aria-hidden>{notifications.unread_count > 99 ? "99+" : notifications.unread_count}</span>}
+              {notificationsFailed && !notifications?.unread_count && <span className="notification-warning" aria-hidden />}
+            </button>
             <button
               type="button"
               className="profile"
@@ -181,6 +263,7 @@ export default function App() {
             >
               <UserRound size={18} strokeWidth={1.75} aria-hidden />
             </button>
+            </div>
           </header>
 
           {offline && agents && <div className="banner">{t.reconnecting}</div>}

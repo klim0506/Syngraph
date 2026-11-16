@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS transactions (
     reason          TEXT,                 -- why rejected or unknown
     created_at      TEXT    NOT NULL      -- UTC, "2026-10-21T14:52:43Z"
 );
+CREATE TABLE IF NOT EXISTS notifications (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id       INTEGER NOT NULL REFERENCES clients(id),
+    operation_id    TEXT    NOT NULL REFERENCES transactions(id),
+    agent_id        INTEGER NOT NULL REFERENCES agents(id),
+    agent_name      TEXT    NOT NULL,
+    payee           TEXT    NOT NULL,
+    amount_kopecks  INTEGER NOT NULL,
+    currency        TEXT    NOT NULL,
+    status          TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL,
+    read_at         TEXT
+);
+CREATE INDEX IF NOT EXISTS notifications_client_id ON notifications(client_id, id DESC);
+CREATE INDEX IF NOT EXISTS notifications_client_unread ON notifications(client_id, id) WHERE read_at IS NULL;
 """
 
 
@@ -219,6 +234,9 @@ def create_tables_and_demo_client(conn: sqlite3.Connection) -> None:
     """Initializes the database atomically; the caller must commit before using it."""
     make_limits_optional(conn)  # an older database needs this before anything else
     conn.execute("BEGIN IMMEDIATE")
+    new_notifications = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notifications'"
+    ).fetchone() is None
     # executescript would commit first and release the initialization lock.
     statement = ""
     for line in SCHEMA.splitlines(keepends=True):
@@ -239,6 +257,69 @@ def create_tables_and_demo_client(conn: sqlite3.Connection) -> None:
         insert_agent_row(conn, mandate["client_id"], mandate["id"], DEFAULT_AGENT_NAME)
     if conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 0:
         insert_demo_client(conn)
+    initialize_notifications(conn, backfill=new_notifications)
+
+
+def initialize_notifications(conn: sqlite3.Connection, *, backfill: bool) -> None:
+    """Capture events in the payment's commit, including writes from another process."""
+    if backfill:
+        # Only unresolved human decisions need attention when upgrading an existing journal.
+        conn.execute(
+            "INSERT INTO notifications (client_id, operation_id, agent_id, agent_name, payee,"
+            " amount_kopecks, currency, status, created_at)"
+            " SELECT a.client_id, t.id, a.id, a.name, t.payee, t.amount_kopecks, t.currency,"
+            " t.status, t.created_at FROM transactions t JOIN agents a ON a.mandate_id = t.mandate_id"
+            " WHERE t.status = 'awaiting' AND a.deleted_at IS NULL ORDER BY t.created_at, t.id"
+        )
+    for name, event, condition, created_at in (
+        ("insert", "INSERT", "", "NEW.created_at"),
+        ("status", "UPDATE OF status", "WHEN OLD.status IS NOT NEW.status", "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"),
+    ):
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS transactions_notification_{name}
+            AFTER {event} ON transactions {condition}
+            BEGIN
+                INSERT INTO notifications (client_id, operation_id, agent_id, agent_name, payee,
+                    amount_kopecks, currency, status, created_at)
+                SELECT a.client_id, NEW.id, a.id, a.name, NEW.payee, NEW.amount_kopecks,
+                    NEW.currency, NEW.status, {created_at}
+                FROM agents a WHERE a.mandate_id = NEW.mandate_id AND a.deleted_at IS NULL;
+            END""")
+
+
+def client_notifications(conn: sqlite3.Connection, client_id: int, limit: int) -> list[sqlite3.Row]:
+    """Immutable event details, newest first; deleted agents do not leave dead links."""
+    return conn.execute(
+        "SELECT n.* FROM notifications n JOIN agents a ON a.id = n.agent_id"
+        " WHERE n.client_id = ? AND a.deleted_at IS NULL ORDER BY n.id DESC LIMIT ?",
+        (client_id, limit),
+    ).fetchall()
+
+
+def unread_notifications(conn: sqlite3.Connection, client_id: int) -> int:
+    """Count the entire unread feed, independent of its displayed page size."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM notifications n JOIN agents a ON a.id = n.agent_id"
+        " WHERE n.client_id = ? AND n.read_at IS NULL AND a.deleted_at IS NULL",
+        (client_id,),
+    ).fetchone()[0]
+
+
+def read_notification(conn: sqlite3.Connection, client_id: int, notification_id: int) -> bool:
+    """Mark an owned, visible event read; repeated calls preserve its first read time."""
+    return conn.execute(
+        "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE client_id = ? AND id = ?"
+        " AND agent_id IN (SELECT id FROM agents WHERE deleted_at IS NULL)",
+        (now_utc(), client_id, notification_id),
+    ).rowcount > 0
+
+
+def read_notifications_through(conn: sqlite3.Connection, client_id: int, through_id: int) -> None:
+    """Leave events arriving after the displayed cutoff unread."""
+    conn.execute(
+        "UPDATE notifications SET read_at = ? WHERE client_id = ? AND id <= ? AND read_at IS NULL"
+        " AND agent_id IN (SELECT id FROM agents WHERE deleted_at IS NULL)",
+        (now_utc(), client_id, through_id),
+    )
 
 
 def insert_demo_client(conn: sqlite3.Connection) -> None:

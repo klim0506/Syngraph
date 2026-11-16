@@ -45,6 +45,14 @@ export default function History({ operations, onChanged, focusedOperation }: Pro
   const [open, setOpen] = useState(false); // the filter pop-up
   const box = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    if (!focusedOperation) return;
+    setStatus("all");
+    setQuery("");
+    setPeriod("all");
+    setOpen(false);
+  }, [focusedOperation?.id]);
+
   usePhoneBack(open, () => setOpen(false), "popover");
 
   useEffect(() => {
