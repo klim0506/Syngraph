@@ -339,6 +339,14 @@ form > .muted + .card { margin-top: 4px; }
 .bank-actions .link { min-height: 38px; }
 .bank-setup { align-self: start; min-height: 32px; }
 .bank-confirm { padding: 10px 0; border-top: 1px solid var(--line); }
+.bank-wizard .steps { margin-bottom: 2px; }
+.bank-options { min-inline-size: 0; margin: 0; padding: 0; border: 0; display: grid; gap: 8px; }
+.bank-options legend { padding: 0; margin-block-end: 8px; font: var(--text-strong); }
+.bank-choice { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.bank-choice input { width: 16px; height: 16px; flex: none; padding: 0; margin: 0; accent-color: var(--blue); }
+.bank-choice:has(input:checked) { border-color: var(--blue); background: var(--blue-soft); }
+.bank-access { margin: 0; padding-inline-start: 20px; }
 .setting { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
 .settings-card { padding: 4px 16px; }
 .srow { display: flex; align-items: center; gap: 12px; padding: 12px 0; }

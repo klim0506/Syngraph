@@ -2,9 +2,13 @@
 -> send to the bank -> update its status. A payment outside the rules waits for the client's decision.
 
 The agent also reads what is its own: its mandate, its operations and how much it may pay now."""
+import json
 import re
 import sqlite3
 from datetime import datetime, timezone
+from decimal import Decimal
+from hashlib import sha256
+from threading import Event
 from typing import Literal, NotRequired, TypedDict, cast, get_args
 
 from uuid6 import uuid7
@@ -12,14 +16,15 @@ from uuid6 import uuid7
 from . import bank, db, keys, rules
 from .errors import BankUnconfirmed, InvalidRequest, UnknownAgent
 from .money import CURRENCY, to_kopecks, to_rubles
+from .order import PaymentOrder
 
 MAX_PAYEE = 160  # the payee field of a Russian payment order holds 160 characters
 MAX_LIST = 100  # operations in one list_payments answer
+IDEMPOTENCY_KEY_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 LIMITS = ["payment", "day", "week", "month"]
 UNCONFIRMED = (
     "the bank did not confirm the payment: it may have gone through, do not pay again, check the operation status"
 )
-NOT_RECEIVED = "the bank has no such payment: it was not made"
 DECLINED = "declined by the client"
 
 
@@ -66,19 +71,48 @@ class Available(TypedDict):
     limited_by: Literal["paused", "payment", "day", "week", "month", "balance"]
 
 
-def pay(agent_key: str, payee: str, payee_inn: str, amount: str, category: str) -> PaymentResult:
+def pay(
+    agent_key: str, payee: str, payee_inn: str, amount: str, category: str, idempotency_key: str | None = None,
+    *, payment_order: PaymentOrder | None = None,
+) -> PaymentResult:
     kopecks = to_kopecks(amount)
     payee = check_payee(payee)
     check_inn(payee_inn)
     check_category(category)
+    order = None
+    if payment_order is not None:
+        if payment_order.payer_inn is not None:
+            check_inn(payment_order.payer_inn)
+        vat = payment_order.vat
+        if vat and vat.amount is not None and Decimal(vat.amount) * 100 > kopecks:
+            raise InvalidRequest("VAT amount must not exceed the total payment amount")
+        order = payment_order.model_dump(mode="json", exclude_unset=True)
+    request_fingerprint = None
+    if idempotency_key is not None:
+        if not isinstance(idempotency_key, str) or not IDEMPOTENCY_KEY_PATTERN.fullmatch(idempotency_key):
+            raise InvalidRequest("idempotency_key must be 1 to 128 ASCII letters, digits, or . _ : -")
+        # Compare what the agent submitted even if the directory supplies a different payee name.
+        request_fields = [payee, payee_inn, kopecks, category]
+        if order is not None:
+            request_fields.append(order)
+        normalized_request = json.dumps(request_fields, sort_keys=True, separators=(",", ":"))
+        request_fingerprint = sha256(normalized_request.encode("ascii")).hexdigest()
+
     conn = db.connect()
     try:
         db.create_tables_and_demo_client(conn)
         conn.commit()
         # Check the current mandate and reserve its limits in one write transaction.
         conn.execute("BEGIN IMMEDIATE")
-        now = datetime.now(timezone.utc)
         mandate = agent_by_key(conn, agent_key)
+        if idempotency_key is not None:
+            existing = db.find_idempotent_transaction(conn, mandate["id"], idempotency_key)
+            if existing is not None:
+                if existing["request_fingerprint"] != request_fingerprint:
+                    raise InvalidRequest("idempotency_key is already used for a different payment request")
+                return to_result(existing)
+
+        now = datetime.now(timezone.utc)
         # A known INN keeps the directory name: the bank and the journal get the same details.
         counterparty = db.get_or_create_counterparty(conn, payee_inn, payee)
         transaction: db.Transaction = {
@@ -94,6 +128,9 @@ def pay(agent_key: str, payee: str, payee_inn: str, amount: str, category: str) 
             "status": "pending",
             "reason": None,
             "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "idempotency_key": idempotency_key,
+            "request_fingerprint": request_fingerprint,
+            "payment_order": json.dumps(order, ensure_ascii=False, sort_keys=True) if order is not None else None,
         }
         verdict, transaction["reason"] = rules.check(conn, mandate, counterparty["id"], payee_inn, category, kopecks, now)
         transaction["status"] = {"pass": "pending", "ask": "awaiting", "reject": "rejected"}[verdict]
@@ -102,7 +139,7 @@ def pay(agent_key: str, payee: str, payee_inn: str, amount: str, category: str) 
         conn.commit()  # saved before the bank is called, so a lost answer leaves a trace
 
         if transaction["status"] == "pending":
-            send(conn, transaction, mandate["client_id"])
+            return to_result(send(conn, transaction, mandate["client_id"]))
     finally:
         conn.close()
     return to_result(transaction)
@@ -127,31 +164,29 @@ def decide(client_id: int, operation_id: str, approve: bool) -> db.Transaction:
         db.update_transaction_status(conn, transaction)
         conn.commit()  # recorded before the bank is called, as in pay()
         if approve:
-            send(conn, transaction, client_id)
+            return cast(db.Transaction, dict(send(conn, transaction, client_id)))
         return transaction
     finally:
         conn.close()
 
 
-def send(conn: sqlite3.Connection, transaction: db.Transaction, client_id: int) -> None:
-    """Sends a recorded pending payment to the bank and saves the answer."""
+def send(conn: sqlite3.Connection, transaction: db.Transaction, client_id: int) -> sqlite3.Row:
+    """Sends the saved order with its original externalId and stores the bank's answer."""
+    order = transaction.get("payment_order")
     try:
         reply = bank.send_payment(
             transaction["id"], client_id, transaction["payee"], transaction["payee_inn"],
-            transaction["amount_kopecks"], transaction["currency"],
+            transaction["amount_kopecks"], transaction["currency"], json.loads(order) if order is not None else None,
         )
-        transaction["bank_id"] = reply["id"]
-        transaction["status"] = reply["status"]
-        transaction["reason"] = reply.get("reason")
     except BankUnconfirmed:
-        transaction["status"] = "unknown"
-        transaction["reason"] = UNCONFIRMED
-    db.update_transaction_status(conn, transaction)
-    conn.commit()
+        with conn:
+            return db.record_bank_result(conn, transaction["id"], None, "unknown", UNCONFIRMED)
+    with conn:
+        return db.record_bank_result(conn, transaction["id"], reply["id"], reply["status"], reply.get("reason"))
 
 
 def get_status(agent_key: str, operation_id: str) -> PaymentResult:
-    """One of the agent's own operations. An unknown one is asked again from the bank first."""
+    """One of the agent's own operations, checked with the bank if still open."""
     conn = db.connect()
     try:
         db.create_tables_and_demo_client(conn)
@@ -160,7 +195,7 @@ def get_status(agent_key: str, operation_id: str) -> PaymentResult:
         row = db.find_mandate_transaction(conn, agent["id"], operation_id)
         if row is None:
             raise InvalidRequest(f"operation {operation_id!r} not found for this agent")
-        return to_result(refresh(conn, row))
+        return to_result(refresh(conn, row, agent["client_id"]))
     finally:
         conn.close()
 
@@ -270,27 +305,34 @@ def agent_by_key(conn: sqlite3.Connection, agent_key: str) -> sqlite3.Row:
     return agent
 
 
-def refresh(conn: sqlite3.Connection, row: sqlite3.Row) -> db.Transaction:
-    """The transaction; an unknown one is asked again from the bank and saved if the bank answers."""
-    transaction = cast(db.Transaction, dict(row))
-    if transaction["status"] == "unknown" and ask_bank_again(transaction):
-        db.update_transaction_status(conn, transaction)
-        conn.commit()
-    return transaction
-
-
-def ask_bank_again(transaction: db.Transaction) -> bool:
-    """Fills in the bank's answer for an unknown payment. False: the bank still does not answer clearly."""
+def refresh(conn: sqlite3.Connection, row: sqlite3.Row, client_id: int) -> sqlite3.Row:
+    """Check externalId first. Retry submission only if the sandbox confirms it is absent."""
+    if row["status"] not in ("pending", "unknown"):
+        return row
     try:
-        reply = bank.get_payment(transaction["id"])
+        reply = bank.get_payment(row["id"])
     except BankUnconfirmed:
-        return False
-    if reply is None:
-        transaction["status"], transaction["reason"] = "rejected", NOT_RECEIVED
-    else:
-        transaction["bank_id"], transaction["status"] = reply["id"], reply["status"]
-        transaction["reason"] = reply.get("reason")
-    return True
+        return row
+    if reply is not None:
+        with conn:
+            return db.record_bank_result(conn, row["id"], reply["id"], reply["status"], reply.get("reason"))
+    if row["bank_id"] is not None:
+        return row  # An order already acknowledged by the bank must never be recreated.
+    return send(conn, cast(db.Transaction, dict(row)), client_id)
+
+
+def reconcile_open_payments(after_id: str, limit: int, stop: Event) -> str:
+    """Reconcile a page of operations without a write transaction across bank calls."""
+    conn = db.connect()
+    try:
+        rows = db.unsettled_operations(conn, after_id, limit)
+        for row in rows:
+            if stop.is_set():
+                break
+            refresh(conn, row, row["client_id"])
+        return rows[-1]["id"] if len(rows) == limit else ""
+    finally:
+        conn.close()
 
 
 def to_result(transaction: db.Transaction | sqlite3.Row) -> PaymentResult:

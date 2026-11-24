@@ -24,18 +24,21 @@ docker compose up --build -d --wait
 
 Open [the client app](http://localhost:8088) and create an agent with **+**. Set its mandate and copy the key shown at the end of setup. Connect your MCP client to `http://localhost:8088/mcp` over Streamable HTTP and send `Authorization: Bearer sgk_...` with each request.
 
-To try the approval flow, enable approval for every payment in the agent's settings and call `pay_invoice` with these example arguments.
+To try the approval flow, enable approval for every payment in the agent's settings and call `pay_invoice` with these example arguments. Generate and save a fresh `idempotency_key` for each new payment.
 
 ```json
 {
   "payee": "Example Supplier",
   "payee_inn": "7707083893",
   "amount": "125.30",
-  "category": "office"
+  "category": "office",
+  "idempotency_key": "26676e5a-9b13-4f22-a4d3-4acdc46f974c"
 }
 ```
 
 The tool returns an operation ID and `awaiting`. Open the operation in the client app and approve it, then pass its ID to `get_payment_status`. The status becomes `paid` when the bank confirms the debit. If a payment is `unknown`, use the same operation ID to check its status before taking further action.
+
+If the tool's reply is lost, retry with the original key and arguments. Syngraph returns the same operation ID and its stored status without sending a second order to the bank.
 
 The local stack binds to `127.0.0.1` and runs with virtual funds and a single preconfigured company, without company sign-in. Bank selection and account assignment in the app are demonstration controls. Payments in this release go through the [bank simulator](demo/bank-sandbox/). The planned bank integration will use the company's existing business account.
 

@@ -74,7 +74,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     status          TEXT    NOT NULL,     -- awaiting | pending | paid | rejected | unknown (the bank did not answer)
     approval_state  TEXT,                 -- not_requested | awaiting | approved | declined; NULL: legacy origin unknown
     reason          TEXT,                 -- why rejected or unknown
-    created_at      TEXT    NOT NULL      -- UTC, "2026-10-21T14:52:43Z"
+    created_at      TEXT    NOT NULL,     -- UTC, "2026-10-21T14:52:43Z"
+    idempotency_key TEXT,
+    request_fingerprint TEXT,
+    payment_order   TEXT                  -- immutable JSON of additional payment details
 );
 CREATE TABLE IF NOT EXISTS notifications (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +94,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS notifications_client_id ON notifications(client_id, id DESC);
 CREATE INDEX IF NOT EXISTS notifications_client_unread ON notifications(client_id, id) WHERE read_at IS NULL;
+CREATE INDEX IF NOT EXISTS transactions_open_id ON transactions(id) WHERE status IN ('pending', 'unknown');
 """
 
 
@@ -113,6 +117,9 @@ class Transaction(TypedDict):
     approval_state: NotRequired[ApprovalState | None]
     reason: str | None
     created_at: str
+    idempotency_key: NotRequired[str | None]
+    request_fingerprint: NotRequired[str | None]
+    payment_order: NotRequired[str | None]
 
 
 def now_utc() -> str:
@@ -142,7 +149,13 @@ ADDED_COLUMNS = {
         "any_time": "INTEGER NOT NULL DEFAULT 0",
         "any_amount": "INTEGER NOT NULL DEFAULT 0",
     },
-    "transactions": {"category": "TEXT", "approval_state": "TEXT"},
+    "transactions": {
+        "category": "TEXT",
+        "approval_state": "TEXT",
+        "idempotency_key": "TEXT",
+        "request_fingerprint": "TEXT",
+        "payment_order": "TEXT",
+    },
     "agents": {"icon": "TEXT NOT NULL DEFAULT 'invoice'", "deleted_at": "TEXT"},
 }
 # Preserve approval provenance for already-running writers that do not know the new column.
@@ -249,6 +262,10 @@ def create_tables_and_demo_client(conn: sqlite3.Connection) -> None:
         for column, definition in columns.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS transactions_idempotency_key"
+        " ON transactions(mandate_id, idempotency_key) WHERE idempotency_key IS NOT NULL"
+    )
     for statement in APPROVAL_TRIGGERS:
         conn.execute(statement)
     for mandate in conn.execute(  # an older database had mandates without agents
@@ -496,11 +513,20 @@ def spent_since(conn: sqlite3.Connection, mandate_id: int, since_utc: str) -> in
 def insert_transaction(conn: sqlite3.Connection, transaction: Transaction) -> None:
     conn.execute(
         "INSERT INTO transactions (id, mandate_id, counterparty_id, payee, payee_inn, bank_id,"
-        " amount_kopecks, currency, category, status, approval_state, reason, created_at)"
+        " amount_kopecks, currency, category, status, approval_state, reason, created_at,"
+        " idempotency_key, request_fingerprint, payment_order)"
         " VALUES (:id, :mandate_id, :counterparty_id, :payee, :payee_inn, :bank_id,"
-        " :amount_kopecks, :currency, :category, :status, :approval_state, :reason, :created_at)",
-        {"approval_state": None, **transaction},
+        " :amount_kopecks, :currency, :category, :status, :approval_state, :reason, :created_at,"
+        " :idempotency_key, :request_fingerprint, :payment_order)",
+        {"approval_state": None, "idempotency_key": None, "request_fingerprint": None,
+         "payment_order": None, **transaction},
     )
+
+
+def find_idempotent_transaction(conn: sqlite3.Connection, mandate_id: int, key: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM transactions WHERE mandate_id = ? AND idempotency_key = ?", (mandate_id, key),
+    ).fetchone()
 
 
 def set_approval_decision(
@@ -515,6 +541,26 @@ def update_transaction_status(conn: sqlite3.Connection, transaction: Transaction
         "UPDATE transactions SET bank_id = :bank_id, status = :status, reason = :reason WHERE id = :id",
         transaction,
     )
+
+
+def record_bank_result(
+    conn: sqlite3.Connection, operation_id: str, bank_id: str | None, status: Status, reason: str | None,
+) -> sqlite3.Row:
+    """Keep terminal outcomes and acknowledgement even if bank replies arrive out of order."""
+    conn.execute(
+        "UPDATE transactions SET bank_id = ?, status = ?, reason = ?"
+        " WHERE id = ? AND status IN ('pending', 'unknown') AND (bank_id IS NULL OR bank_id = ?)",
+        (bank_id, status, reason, operation_id, bank_id),
+    )
+    return conn.execute("SELECT * FROM transactions WHERE id = ?", (operation_id,)).fetchone()
+
+
+def unsettled_operations(conn: sqlite3.Connection, after_id: str, limit: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT t.*, m.client_id FROM transactions t JOIN mandates m ON m.id = t.mandate_id"
+        " WHERE t.id > ? AND t.status IN ('pending', 'unknown') ORDER BY t.id LIMIT ?",
+        (after_id, limit),
+    ).fetchall()
 
 
 # A transaction with the agent that made it.

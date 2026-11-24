@@ -13,8 +13,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from core import (
-    Available, BankUnavailable, InvalidRequest, Mandate, MandateMisconfigured, Payment, PaymentResult, UnknownAgent,
-    get_status, pay,
+    Available, BankUnavailable, InvalidRequest, Mandate, MandateMisconfigured, Payment, PaymentOrder, PaymentResult,
+    UnknownAgent, get_status, pay,
 )
 # Under other names: the tools below take these names, the agent sees them.
 from core import get_available_balance as get_available_balance_of
@@ -39,7 +39,10 @@ def agent_key(ctx: Context) -> str:
 
 
 @mcp.tool()
-def pay_invoice(ctx: Context, payee: str, payee_inn: str, amount: str, category: Category) -> PaymentResult:
+def pay_invoice(
+    ctx: Context, payee: str, payee_inn: str, amount: str, category: Category, idempotency_key: str | None = None,
+    payment_order: PaymentOrder | None = None,
+) -> PaymentResult:
     """Pay a supplier invoice in Russian rubles under this agent's mandate.
 
     payee: supplier name as on the invoice, 1 to 160 characters. Used only for a new INN:
@@ -50,16 +53,25 @@ def pay_invoice(ctx: Context, payee: str, payee_inn: str, amount: str, category:
         it (IT and telecom), marketing, rent, transport (transport and logistics), travel (business trips),
         services (contractors), taxes (taxes and fees), entertainment. The client's rules may allow
         only some categories or forbid some.
+    idempotency_key: generate and save a unique key (such as a UUID) before the first attempt.
+        Use 1 to 128 ASCII letters, digits, or . _ : -. If this call times out or its reply is lost,
+        retry with the same key and payment details. The same agent gets the original operation ID
+        and its stored status, which can be "pending" while the first call is in progress.
+        Changing payment details under the same key is an error. Calls without a key create new operations.
+    payment_order: optional ruble payment order details. Supply the recipient's account and bank BIC,
+        payment purpose (up to 210 characters), and any applicable VAT, budget or currency-operation details.
+        All details are saved before approval and reused for submission and recovery. The optional payer fields
+        describe the document. The debit uses the client's account assigned by Syngraph.
     Returns the operation id, status and the payee name sent to the bank.
     Status "awaiting": the payment is outside the client's rules, or the client approves every payment;
-    "reason" says why. The client approves or declines it in the Syngraph app: check later with
-    get_payment_status, do not pay again.
-    Status "rejected": the client's rules or the client refused the payment, "reason" explains why.
+    "reason" says why. The client approves or declines it in the Syngraph app.
+    Status "pending": the bank outcome is still outstanding.
+    Status "rejected": the mandate, client or bank refused the payment, "reason" explains why.
     Status "unknown": the bank did not confirm, the payment may have gone through.
-    Do not pay this invoice again: check the operation with get_payment_status.
+    Use get_payment_status with the operation ID to follow an awaiting, pending or unknown payment.
     """
     try:
-        return pay(agent_key(ctx), payee, payee_inn, amount, category)
+        return pay(agent_key(ctx), payee, payee_inn, amount, category, idempotency_key, payment_order=payment_order)
     except (InvalidRequest, UnknownAgent) as e:  # the agent or its developer can fix it
         raise ToolError(str(e)) from e
     except MandateMisconfigured as e:  # only the client can fix it; any other error is our failure
@@ -70,11 +82,11 @@ def pay_invoice(ctx: Context, payee: str, payee_inn: str, amount: str, category:
 def get_payment_status(ctx: Context, operation_id: str) -> PaymentResult:
     """Get the status of one of this agent's operations returned by pay_invoice.
 
-    operation_id: the "id" from the pay_invoice response.
-    Returns the same fields as pay_invoice. "awaiting" stays until the client decides: then
-    "paid" (or "unknown" if the bank did not confirm) or "rejected". For an "unknown" operation Syngraph asks the bank again:
-    "paid" if the bank made it, "rejected" if the bank never received it (pay again with a new
-    pay_invoice), still "unknown" if the bank does not answer (ask again later).
+    operation_id: the "id" from pay_invoice, also the externalId at the bank sandbox.
+    "awaiting" stays until the client decides. Syngraph checks "pending" and "unknown" payments
+    with the bank by this ID. Final statuses are "paid" and "rejected". If the sandbox confirms an
+    unacknowledged order is absent, Syngraph submits the saved order again with the same ID.
+    A deliberate new payment attempt after a final rejection needs a new idempotency key.
     """
     try:
         return get_status(agent_key(ctx), operation_id)
@@ -111,7 +123,7 @@ def list_payments(ctx: Context, status: Status | None = None, payee_inn: str | N
     status: only operations with this status. payee_inn: only payments to this INN.
     limit: how many, 1 to 100.
     Each has the fields of pay_invoice plus created_at (UTC), payee_inn, amount (rubles, e.g.
-    "245000.00") and category. Statuses are as stored: for an "unknown" one call get_payment_status.
+    "245000.00") and category. For a fresh bank status use get_payment_status.
     """
     try:
         return list_payments_of(agent_key(ctx), status, payee_inn, limit)

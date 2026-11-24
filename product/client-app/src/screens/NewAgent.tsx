@@ -2,7 +2,7 @@ import { FormEvent, useState } from "react";
 import { addAgent, Agent, AgentIcon, Counterparty, findByInn, newAgentKey } from "../api";
 import { setAgentDemoAccount } from "../demoBank";
 import { serverText, useT } from "../i18n";
-import { usePhoneBack, usePhoneNavigationBlock } from "../PhoneNavigation";
+import { canNavigatePhone, usePhoneBack, usePhoneNavigationBlock } from "../PhoneNavigation";
 import { AgentGlyph, ICONS } from "../icons";
 import { FreshKey } from "./AgentSettings";
 import { PayeeList } from "./Counterparties";
@@ -37,6 +37,7 @@ export default function NewAgent({ onCreated, onDone }: Props) {
   const [name, setName] = useState("");
   const [icon, setIcon] = useState<AgentIcon>("invoice");
   const [account, setAccount] = useState("");
+  const [bankSetup, setBankSetup] = useState(false);
   const [draft, setDraft] = useState<Draft>(START);
   const [payeesOnly, setPayeesOnly] = useState(false);
   const [payees, setPayees] = useState<Counterparty[]>([]); // kept here until the agent is created
@@ -53,7 +54,7 @@ export default function NewAgent({ onCreated, onDone }: Props) {
 
   function next(e: FormEvent) {
     e.preventDefault();
-    if (name.trim()) setStep(2);
+    if (!bankSetup && canNavigatePhone() && name.trim()) setStep(2);
   }
 
   /** A payee for the list; the directory checks the INN and gives a known one its name. */
@@ -69,7 +70,7 @@ export default function NewAgent({ onCreated, onDone }: Props) {
     const settings = { ...changeOf(draft), icon, any_counterparty: !payeesOnly };
     try {
       const agent = await addAgent(name.trim(), settings, payeesOnly ? payees : []);
-      const accountFailed = !!account && setAgentDemoAccount(agent.id, account) !== null;
+      const accountFailed = !!account && (await setAgentDemoAccount(agent.id, account)) !== null;
       // without a key the agent still exists: open it, the key is made in its settings
       const fresh = await newAgentKey(agent.id).catch(() => null);
       if (!fresh && !accountFailed) return onDone(agent);
@@ -111,10 +112,10 @@ export default function NewAgent({ onCreated, onDone }: Props) {
               </div>
             </section>
           </form>
-          <DemoAccountPicker value={account} onChange={setAccount} />
-          <button type="submit" form="new-agent-identity" className="btn-primary wizard-next" disabled={!name.trim()}>
+          <DemoAccountPicker value={account} onChange={setAccount} onSetupChange={setBankSetup} />
+          {!bankSetup && <button type="submit" form="new-agent-identity" className="btn-primary wizard-next" disabled={!name.trim()}>
             {t.next}
-          </button>
+          </button>}
         </>
       )}
 

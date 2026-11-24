@@ -2,11 +2,14 @@
 
 No sign-in yet: the client id comes in the path, so the API must listen on 127.0.0.1 only.
 """
+import asyncio
+import logging
 import re
 import sqlite3
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import asynccontextmanager, closing, contextmanager
 from datetime import datetime, time, timedelta, timezone
+from threading import Event
 from typing import Literal, TypedDict
 from zoneinfo import ZoneInfo
 
@@ -17,9 +20,34 @@ from pydantic import BaseModel, Field
 from . import db, keys, rules
 from .errors import InvalidRequest, MandateMisconfigured
 from .money import to_kopecks
-from .payments import check_inn, check_payee, decide, refresh
+from .payments import check_inn, check_payee, decide, reconcile_open_payments, refresh
 
-app = FastAPI(title="Syngraph core")
+logger = logging.getLogger(__name__)
+
+
+def reconcile_until_stopped(stop: Event) -> None:
+    after_id = ""
+    while not stop.wait(1):
+        try:
+            after_id = reconcile_open_payments(after_id, 20, stop)
+        except sqlite3.OperationalError:
+            logger.exception("Could not reconcile open bank payments")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    with open_db():
+        pass
+    stop = Event()
+    worker = asyncio.create_task(asyncio.to_thread(reconcile_until_stopped, stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        await worker
+
+
+app = FastAPI(title="Syngraph core", lifespan=lifespan)
 
 PERIODS = ["payment", "day", "week", "month"]
 MAX_FEED = 200
@@ -571,12 +599,12 @@ def read_one_notification(client_id: int, notification_id: int) -> Response:
 
 @app.post("/api/clients/{client_id}/operations/{operation_id}/check")
 def check_operation(client_id: int, operation_id: str) -> Operation:
-    """Asks the bank again about an unknown operation, like the agent's get_payment_status."""
+    """Checks an open operation with the bank, like the agent's get_payment_status."""
     with open_db() as conn:
         row = db.find_transaction(conn, client_id, operation_id)
         if row is None:
             raise HTTPException(404, f"operation {operation_id!r} not found for client {client_id}")
-        refresh(conn, row)
+        refresh(conn, row, client_id)
         return operation_view(db.find_transaction(conn, client_id, operation_id))
 
 

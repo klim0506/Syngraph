@@ -1,7 +1,7 @@
 """Connection to the client's bank. Today it is the bank sandbox; real banks get their own adapters later.
 
-Every order carries the Syngraph operation id: the bank does not pay the same id twice
-and answers its status by that id, so a lost answer can be asked again.
+The Syngraph operation id is the externalId at the sandbox. The bank answers by that id
+and executes a matching order only once.
 """
 import os
 from typing import Literal, NotRequired, TypedDict
@@ -15,12 +15,13 @@ BANK_URL = os.environ.get("BANK_URL", "http://127.0.0.1:8001")
 
 class BankReply(TypedDict):
     id: str
-    status: Literal["paid", "rejected"]
+    status: Literal["pending", "paid", "rejected"]
     reason: NotRequired[str]  # why the bank rejected it
 
 
 def send_payment(
-    operation_id: str, account: int, payee: str, payee_inn: str, kopecks: int, currency: str
+    operation_id: str, account: int, payee: str, payee_inn: str, kopecks: int, currency: str,
+    payment_order: dict | None = None,
 ) -> BankReply:
     """Sends a payment order from the client's account. Raises BankUnconfirmed if the bank does not answer clearly."""
     order = {
@@ -31,10 +32,12 @@ def send_payment(
         "amount_kopecks": kopecks,
         "currency": currency,
     }
+    if payment_order is not None:
+        order["payment_order"] = payment_order
     try:
         response = httpx.post(f"{BANK_URL}/pay", json=order)
         response.raise_for_status()
-        return read_reply(response)
+        return read_reply(response, operation_id)
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:  # no answer, an error or an unreadable one
         raise BankUnconfirmed(str(e)) from e
 
@@ -47,7 +50,7 @@ def get_payment(operation_id: str) -> BankReply | None:
         if response.status_code == 404:
             return None
         response.raise_for_status()
-        return read_reply(response)
+        return read_reply(response, operation_id)
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
         raise BankUnconfirmed(str(e)) from e
 
@@ -65,12 +68,14 @@ def get_balance(account: int) -> int:
         raise BankUnavailable(str(e)) from e
 
 
-def read_reply(response: httpx.Response) -> BankReply:
+def read_reply(response: httpx.Response, operation_id: str) -> BankReply:
     reply = response.json()
+    if not isinstance(reply, dict) or reply.get("externalId", operation_id) != operation_id:
+        raise ValueError("bank replied about a different payment")
     bank_id, status = reply["id"], reply["status"]
     if not isinstance(bank_id, str) or not bank_id.strip():
         raise ValueError("bank payment id must be a non-empty string")
-    if status == "paid":
+    if status in ("pending", "paid"):
         return {"id": bank_id, "status": status}
     if status == "rejected":
         reason = reply["reason"]

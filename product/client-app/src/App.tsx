@@ -229,7 +229,9 @@ export default function App() {
         agent={openAgent}
         section={section}
         operationId={route.operationId}
-        onSection={(next) => navigate({ ...route, section: next, operationId: undefined })}
+        onSection={(next) => {
+          if (canNavigatePhone()) navigate({ ...route, section: next, operationId: undefined });
+        }}
         operations={operations.filter((o) => o.agent_id === openAgent.id)}
         onAgent={updateAgent}
         onDeleted={() => removeAgent(openAgent.id)}

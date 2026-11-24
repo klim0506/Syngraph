@@ -122,7 +122,7 @@ export default function AgentScreen({ agent, section: current, operationId, onSe
                 <input type="checkbox" role="switch" className={`pay-switch ${agent.paused ? "off" : "on"}`} checked={!agent.paused} disabled={busy || asking} title={agent.paused ? t.stopped : t.payments} onChange={() => setAsking(true)} />
               </label>
             </section>
-            <DeleteAgent agent={agent} onDeleted={() => { setAgentDemoAccount(agent.id, ""); onDeleted(); }} />
+            <DeleteAgent agent={agent} onDeleted={() => { void setAgentDemoAccount(agent.id, ""); onDeleted(); }} />
           </>
         )}
       </div>
